@@ -123,6 +123,18 @@ export default function Dialer() {
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [settingsMicVolume, setSettingsMicVolume] = useState(0);
 
+  // Refs to avoid stale closures in event listeners & timeouts
+  const phoneNumberRef = useRef('');
+  const currentCallRef = useRef<any>(null);
+
+  useEffect(() => {
+    phoneNumberRef.current = phoneNumber;
+  }, [phoneNumber]);
+
+  useEffect(() => {
+    currentCallRef.current = currentCall;
+  }, [currentCall]);
+
   // Refs
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -139,6 +151,7 @@ export default function Dialer() {
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const slotAudiosRef = useRef<(HTMLAudioElement | null)[]>([null, null, null]);
+  const wiredElementsRef = useRef<(HTMLAudioElement | null)[]>([null, null, null]);
   const slotSourcesRef = useRef<any[]>([null, null, null]);
   const slotGainsRef = useRef<any[]>([null, null, null]);
   const micGainNodeRef = useRef<GainNode | null>(null);
@@ -236,40 +249,59 @@ export default function Dialer() {
   const ensureMixerContext = () => {
     if (typeof window === 'undefined') return;
     try {
-      if (!mixerContextRef.current) {
+      let ctx = mixerContextRef.current;
+      let dest = mixerDestinationRef.current;
+
+      if (!ctx) {
+        console.log('[Mixer] Initializing global Web Audio mixer context with interactive latency.');
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         if (!AudioContextClass) return;
-
-        console.log('[Mixer] Initializing global Web Audio mixer context with interactive latency.');
-        const ctx = new AudioContextClass({
+        ctx = new AudioContextClass({
           latencyHint: 'interactive'
         });
         mixerContextRef.current = ctx;
 
-        const dest = ctx.createMediaStreamDestination();
+        dest = ctx.createMediaStreamDestination();
         mixerDestinationRef.current = dest;
+      }
 
-        // Wire up slot audio elements (prevent duplicate sources for same elements)
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+
+      // Wire up slot audio elements dynamically (handles DOM node recreation on re-render)
+      if (dest) {
+        const currentCtx = ctx;
+        const currentDest = dest;
         slotAudiosRef.current.forEach((audioEl, index) => {
-          if (audioEl && !slotSourcesRef.current[index]) {
+          if (audioEl && (wiredElementsRef.current[index] !== audioEl || !slotSourcesRef.current[index])) {
             try {
-              const sourceNode = ctx.createMediaElementSource(audioEl);
-              slotSourcesRef.current[index] = sourceNode;
+              console.log(`[Mixer] Wiring up audio element for slot ${index + 1}...`);
+              // Clean up previous source node if it existed
+              if (slotSourcesRef.current[index]) {
+                try { slotSourcesRef.current[index].disconnect(); } catch (e) {}
+              }
 
-              const gainNode = ctx.createGain();
-              gainNode.gain.value = soundPadVolume;
-              slotGainsRef.current[index] = gainNode;
+              const sourceNode = currentCtx.createMediaElementSource(audioEl);
+              slotSourcesRef.current[index] = sourceNode;
+              wiredElementsRef.current[index] = audioEl;
+
+              // Reuse existing gain node if we have one, otherwise create a new one
+              let gainNode = slotGainsRef.current[index];
+              if (!gainNode) {
+                gainNode = currentCtx.createGain();
+                gainNode.gain.value = soundPadVolume;
+                slotGainsRef.current[index] = gainNode;
+              }
 
               sourceNode.connect(gainNode);
-              gainNode.connect(dest); // Routes to call channel
-              gainNode.connect(ctx.destination); // Routes to local speaker output
+              gainNode.connect(currentDest); // Routes to call channel
+              gainNode.connect(currentCtx.destination); // Routes to local speaker output
             } catch (err) {
               console.warn(`[Mixer] Failed to capture audio element for slot ${index}:`, err);
             }
           }
         });
-      } else if (mixerContextRef.current.state === 'suspended') {
-        mixerContextRef.current.resume();
       }
     } catch (e) {
       console.error('[Mixer] Context initialization failed:', e);
@@ -425,6 +457,29 @@ export default function Dialer() {
         rtcClient.on('telnyx.error', (error: any) => {
           if (!active) return;
           console.error('[Dialer] Telnyx SDK error:', error);
+          
+          const msg = (error?.message || '').toLowerCase();
+          const isNonFatal = 
+            msg.includes('normal clearing') || 
+            msg.includes('user hung up') || 
+            msg.includes('call rejected') ||
+            msg.includes('cancelled') ||
+            msg.includes('dialog_error') ||
+            msg.includes('invalidstateerror') ||
+            msg.includes('peer connection') ||
+            msg.includes('webrtc') ||
+            msg.includes('ice') ||
+            msg.includes('media') ||
+            msg.includes('track') ||
+            msg.includes('stream') ||
+            msg.includes('close') ||
+            msg.includes('bye');
+
+          if (isNonFatal) {
+            console.log('[Dialer] Ignored non-fatal SDK error event:', error);
+            return;
+          }
+
           setSipState('error');
           setErrorMessage(error.message || 'Authentication or connection error.');
         });
@@ -492,6 +547,7 @@ export default function Dialer() {
 
               case 'done':
                 setCallState('done');
+                console.log('[Dialer] Call ended. Cause:', call.cause, 'Cause Code:', call.causeCode, 'Direction:', call.direction);
                 audioService.stopRingback();
                 audioService.stopRingtone();
                 audioService.playCallEnd();
@@ -527,7 +583,7 @@ export default function Dialer() {
 
                 const newLog: CallLog = {
                   id: Math.random().toString(36).substr(2, 9),
-                  number: call.destinationNumber || call.callerNumber || phoneNumber,
+                  number: call.destinationNumber || call.callerNumber || phoneNumberRef.current,
                   type: logType,
                   timestamp: Date.now(),
                   duration,
@@ -744,7 +800,9 @@ export default function Dialer() {
 
       const call = client.newCall({
         destinationNumber: cleanNumber,
-        audio: getAudioConstraints(selectedMic, enableAEC, enableANS, enableAGC),
+        audio: mixedStream 
+          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } 
+          : getAudioConstraints(selectedMic, enableAEC, enableANS, enableAGC),
         localStream: mixedStream || undefined,
         callerNumber: telnyxNumber || undefined,
       });
@@ -766,45 +824,80 @@ export default function Dialer() {
       console.warn('[Dialer] Error calling currentCall.hangup():', e);
     }
     
-    // Force teardown states in case 'done' event isn't received
+    // Set UI state to 'done' immediately for visual feedback
     setCallState('done');
     audioService.stopRingback();
     audioService.stopRingtone();
     audioService.playCallEnd();
-    stopMicCapture();
-    
-    if (inputVolumeAnalyserRef.current) {
-      inputVolumeAnalyserRef.current.stop();
-      inputVolumeAnalyserRef.current = null;
-    }
-    if (outputVolumeAnalyserRef.current) {
-      outputVolumeAnalyserRef.current.stop();
-      outputVolumeAnalyserRef.current = null;
-    }
-    setInputVolume(0);
-    setOutputVolume(0);
 
-    if (durationIntervalRef.current) {
-      clearInterval(durationIntervalRef.current);
-      durationIntervalRef.current = null;
-    }
-
+    // Fallback: in case the SDK fails to send the 'done' event within 4 seconds,
+    // force clean up to prevent the UI from locking up.
     setTimeout(() => {
-      setCallState('idle');
-      setCurrentCall(null);
-      setCallDuration(0);
-      callStartTimeRef.current = null;
-    }, 800);
+      if (currentCallRef.current) {
+        console.log('[Dialer] Done event not received in 4s, forcing cleanup...');
+        stopMicCapture();
+        if (inputVolumeAnalyserRef.current) {
+          inputVolumeAnalyserRef.current.stop();
+          inputVolumeAnalyserRef.current = null;
+        }
+        if (outputVolumeAnalyserRef.current) {
+          outputVolumeAnalyserRef.current.stop();
+          outputVolumeAnalyserRef.current = null;
+        }
+        setInputVolume(0);
+        setOutputVolume(0);
+        if (durationIntervalRef.current) {
+          clearInterval(durationIntervalRef.current);
+          durationIntervalRef.current = null;
+        }
+        
+        // Log to history using fallback values
+        const duration = callStartTimeRef.current 
+          ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
+          : undefined;
+
+        const isIncoming = currentCallRef.current.direction === 'inbound';
+        const logType = isIncoming 
+          ? (duration && duration > 0 ? 'incoming' : 'missed') 
+          : 'outgoing';
+
+        const newLog: CallLog = {
+          id: Math.random().toString(36).substr(2, 9),
+          number: currentCallRef.current.destinationNumber || currentCallRef.current.callerNumber || phoneNumberRef.current || 'Unknown',
+          type: logType,
+          timestamp: Date.now(),
+          duration,
+        };
+
+        setCallHistory(prev => {
+          const updated = [newLog, ...prev];
+          localStorage.setItem('call_dialer_history', JSON.stringify(updated));
+          return updated;
+        });
+
+        setCallState('idle');
+        setCurrentCall(null);
+        setCallDuration(0);
+        callStartTimeRef.current = null;
+      }
+    }, 4000);
   };
 
   const handleAnswer = async () => {
     if (currentCall && callState === 'ringing') {
       stopSettingsMicTest(); // Stop tester when answering a call
       const mixedStream = await getMixedStream();
-      currentCall.answer({
-        audio: getAudioConstraints(selectedMic, enableAEC, enableANS, enableAGC),
-        localStream: mixedStream || undefined,
-      });
+      
+      // Explicitly set the localStream and audio constraints on currentCall.options
+      // since answer() ignores these arguments and retrieves them from the call options object.
+      if (mixedStream) {
+        currentCall.options.localStream = mixedStream;
+        currentCall.options.audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+      } else {
+        currentCall.options.audio = getAudioConstraints(selectedMic, enableAEC, enableANS, enableAGC);
+      }
+
+      currentCall.answer();
     }
   };
 
