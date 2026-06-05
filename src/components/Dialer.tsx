@@ -31,6 +31,111 @@ interface CallLog {
   duration?: number;
 }
 
+// Helper to modify SDP for higher Opus quality constraints
+const modifySdp = (sdp: string): string => {
+  if (!sdp || !sdp.includes('opus/48000')) return sdp;
+
+  // Modify the Opus payload type format parameters dynamically
+  return sdp.replace(/a=fmtp:(\d+)\s+([^\r\n]+)/g, (match, pt, params) => {
+    if (sdp.includes(`rtpmap:${pt} opus/48000`)) {
+      const paramMap = new Map<string, string>();
+      params.split(';').forEach((p: string) => {
+        const parts = p.trim().split('=');
+        if (parts[0]) {
+          paramMap.set(parts[0].trim(), parts[1] ? parts[1].trim() : '');
+        }
+      });
+
+      // Override with optimal WebRTC performance values
+      paramMap.set('stereo', '0');                 // Force mono for call voice efficiency
+      paramMap.set('useinbandfec', '1');          // Enable Forward Error Correction for packet loss protection
+      paramMap.set('maxaveragebitrate', '40000'); // Elevate average voice bitrate to 40kbps
+      paramMap.set('maxplaybackrate', '48000');   // Target 48kHz audio capture/playback
+      paramMap.set('usedtx', '1');                // Enable silence suppression (Discontinuous Transmission)
+
+      const newParams = Array.from(paramMap.entries())
+        .map(([k, v]) => v ? `${k}=${v}` : k)
+        .join('; ');
+
+      return `a=fmtp:${pt} ${newParams}`;
+    }
+    return match;
+  });
+};
+
+// Global WebRTC monkey patch for SDP capture
+if (typeof window !== 'undefined') {
+  try {
+    const pcProto = RTCPeerConnection.prototype as any;
+
+    const originalCreateOffer = pcProto.createOffer;
+    pcProto.createOffer = function () {
+      const successCb = arguments[0];
+      const failureCb = arguments[1];
+      const options = arguments[2];
+
+      // Support legacy callback-based createOffer
+      if (typeof successCb === 'function') {
+        const wrappedSuccessCb = function (offer: any) {
+          if (offer && offer.sdp) {
+            offer.sdp = modifySdp(offer.sdp);
+          }
+          successCb(offer);
+        };
+        return originalCreateOffer.call(this, wrappedSuccessCb, failureCb, options);
+      }
+
+      // Support modern Promise-based createOffer
+      const promise = originalCreateOffer.apply(this, arguments as any);
+      return promise.then((offer: any) => {
+        if (offer && offer.sdp) {
+          offer.sdp = modifySdp(offer.sdp);
+        }
+        return offer;
+      });
+    };
+
+    const originalCreateAnswer = pcProto.createAnswer;
+    pcProto.createAnswer = function () {
+      const successCb = arguments[0];
+      const failureCb = arguments[1];
+      const options = arguments[2];
+
+      // Support legacy callback-based createAnswer
+      if (typeof successCb === 'function') {
+        const wrappedSuccessCb = function (answer: any) {
+          if (answer && answer.sdp) {
+            answer.sdp = modifySdp(answer.sdp);
+          }
+          successCb(answer);
+        };
+        return originalCreateAnswer.call(this, wrappedSuccessCb, failureCb, options);
+      }
+
+      // Support modern Promise-based createAnswer
+      const promise = originalCreateAnswer.apply(this, arguments as any);
+      return promise.then((answer: any) => {
+        if (answer && answer.sdp) {
+          answer.sdp = modifySdp(answer.sdp);
+        }
+        return answer;
+      });
+    };
+
+    const originalSetLocalDescription = pcProto.setLocalDescription;
+    pcProto.setLocalDescription = function (desc?: any) {
+      if (desc && desc.sdp) {
+        desc.sdp = modifySdp(desc.sdp);
+      }
+      return originalSetLocalDescription.apply(this, arguments as any);
+    };
+    
+    console.log('[WebRTC Quality Hook] RTCPeerConnection SDP munger installed successfully.');
+  } catch (e) {
+    console.warn('[WebRTC Quality Hook] Failed to monkey patch PeerConnection methods:', e);
+  }
+}
+
 // Volume Spinner Component for real-time visual feedback
 const VolumeSpinner = ({ volume, icon: Icon, active, color = 'stroke-emerald-500' }: { 
   volume: number; 
@@ -78,7 +183,10 @@ const getAudioConstraints = (micId?: string, aec = true, ans = true, agc = true)
     echoCancellation: aec,
     noiseSuppression: ans,
     autoGainControl: agc,
-    channelCount: 1,
+    sampleRate: 48000,
+    sampleSize: 16,
+    channelCount: 1, // Mono is optimal for VoIP voice
+    latency: 0.01,   // Request low latency (10ms)
     deviceId: micId ? { exact: micId } : undefined,
   };
 };
@@ -117,11 +225,15 @@ export default function Dialer() {
 
   // Sound Pad State
   const [soundFiles, setSoundFiles] = useState<(File | null)[]>([null, null, null]);
-  const [soundUrls, setSoundUrls] = useState<(string | null)[]>([null, null, null]);
   const [playingStates, setPlayingStates] = useState<boolean[]>([false, false, false]);
   const [soundPadVolume, setSoundPadVolume] = useState(0.5);
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [settingsMicVolume, setSettingsMicVolume] = useState(0);
+
+  // Account status and health
+  const [balance, setBalance] = useState<string>('0.00');
+  const [numberHealth, setNumberHealth] = useState<string>('unknown');
+  const [fetchingStatus, setFetchingStatus] = useState<boolean>(false);
 
   // Refs to avoid stale closures in event listeners & timeouts
   const phoneNumberRef = useRef('');
@@ -150,9 +262,8 @@ export default function Dialer() {
   const mixerDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
-  const slotAudiosRef = useRef<(HTMLAudioElement | null)[]>([null, null, null]);
-  const wiredElementsRef = useRef<(HTMLAudioElement | null)[]>([null, null, null]);
-  const slotSourcesRef = useRef<any[]>([null, null, null]);
+  const soundBuffersRef = useRef<(AudioBuffer | null)[]>([null, null, null]);
+  const activeSourcesRef = useRef<(AudioBufferSourceNode | null)[]>([null, null, null]);
   const slotGainsRef = useRef<any[]>([null, null, null]);
   const micGainNodeRef = useRef<GainNode | null>(null);
 
@@ -269,39 +380,24 @@ export default function Dialer() {
         ctx.resume();
       }
 
-      // Wire up slot audio elements dynamically (handles DOM node recreation on re-render)
-      if (dest) {
-        const currentCtx = ctx;
-        const currentDest = dest;
-        slotAudiosRef.current.forEach((audioEl, index) => {
-          if (audioEl && (wiredElementsRef.current[index] !== audioEl || !slotSourcesRef.current[index])) {
-            try {
-              console.log(`[Mixer] Wiring up audio element for slot ${index + 1}...`);
-              // Clean up previous source node if it existed
-              if (slotSourcesRef.current[index]) {
-                try { slotSourcesRef.current[index].disconnect(); } catch (e) {}
-              }
-
-              const sourceNode = currentCtx.createMediaElementSource(audioEl);
-              slotSourcesRef.current[index] = sourceNode;
-              wiredElementsRef.current[index] = audioEl;
-
-              // Reuse existing gain node if we have one, otherwise create a new one
-              let gainNode = slotGainsRef.current[index];
-              if (!gainNode) {
-                gainNode = currentCtx.createGain();
-                gainNode.gain.value = soundPadVolume;
-                slotGainsRef.current[index] = gainNode;
-              }
-
-              sourceNode.connect(gainNode);
-              gainNode.connect(currentDest); // Routes to call channel
-              gainNode.connect(currentCtx.destination); // Routes to local speaker output
-            } catch (err) {
-              console.warn(`[Mixer] Failed to capture audio element for slot ${index}:`, err);
-            }
-          }
+      // Sync AudioContext speaker routing if supported
+      if (typeof (ctx as any).setSinkId === 'function' && selectedSpeaker) {
+        (ctx as any).setSinkId(selectedSpeaker).catch((e: any) => {
+          console.warn('[Mixer Speaker] Failed to set sink ID on AudioContext:', e);
         });
+      }
+
+      // Ensure slot gain nodes are set up and connected to output destinations
+      if (dest) {
+        for (let i = 0; i < 3; i++) {
+          if (!slotGainsRef.current[i]) {
+            const gainNode = ctx.createGain();
+            gainNode.gain.value = soundPadVolume;
+            slotGainsRef.current[i] = gainNode;
+            gainNode.connect(dest);
+            gainNode.connect(ctx.destination);
+          }
+        }
       }
     } catch (e) {
       console.error('[Mixer] Context initialization failed:', e);
@@ -334,12 +430,34 @@ export default function Dialer() {
       // Add mic source node to Web Audio destination node
       const micSource = ctx.createMediaStreamSource(micStream);
       micSourceRef.current = micSource;
+
+      // Web Audio processing nodes pipeline (HPF -> Presence Peaking -> Compressor)
+      const hpf = ctx.createBiquadFilter();
+      hpf.type = 'highpass';
+      hpf.frequency.setValueAtTime(80, ctx.currentTime);
+
+      const presence = ctx.createBiquadFilter();
+      presence.type = 'peaking';
+      presence.frequency.setValueAtTime(3000, ctx.currentTime);
+      presence.gain.setValueAtTime(3, ctx.currentTime);
+      presence.Q.setValueAtTime(1, ctx.currentTime);
+
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-24, ctx.currentTime);
+      compressor.knee.setValueAtTime(30, ctx.currentTime);
+      compressor.ratio.setValueAtTime(12, ctx.currentTime);
+      compressor.attack.setValueAtTime(0.003, ctx.currentTime);
+      compressor.release.setValueAtTime(0.25, ctx.currentTime);
       
       const micGain = ctx.createGain();
       micGain.gain.value = isMicEnabled ? 1.0 : 0.0;
       micGainNodeRef.current = micGain;
 
-      micSource.connect(micGain);
+      // Connect nodes: Mic -> HPF -> Presence -> Compressor -> Mic Gain -> Destination
+      micSource.connect(hpf);
+      hpf.connect(presence);
+      presence.connect(compressor);
+      compressor.connect(micGain);
       micGain.connect(dest);
 
       return dest.stream;
@@ -405,20 +523,51 @@ export default function Dialer() {
   // Fetch credentials & initialize TelnyxRTC (Client side only)
   useEffect(() => {
     let active = true;
-    let localClient: any = null;
+    const reconnectAttemptsRef = { current: 0 };
+    const reconnectTimeoutRef = { current: null as any };
+    const isReconnectingRef = { current: false };
 
-    const init = async () => {
+    // Retrieve public caller ID number
+    const outboundNumber = process.env.NEXT_PUBLIC_TELNYX_NUMBER || '';
+    setTelnyxNumber(outboundNumber);
+
+    // Populate devices list immediately
+    loadAudioDevices(false);
+
+    const scheduleReconnect = () => {
+      if (!active) return;
+      if (isReconnectingRef.current) return;
+      isReconnectingRef.current = true;
+      setSipState('connecting');
+
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+      console.log(`[Dialer] WebRTC socket closed/failed. Scheduling reconnect attempt #${reconnectAttemptsRef.current + 1} in ${delay}ms...`);
+      
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = setTimeout(async () => {
+        reconnectAttemptsRef.current += 1;
+        isReconnectingRef.current = false;
+        await establishConnection();
+      }, delay);
+    };
+
+    const establishConnection = async () => {
+      if (!active) return;
+      
       try {
         setSipState('connecting');
         
-        // Retrieve public caller ID number
-        const outboundNumber = process.env.NEXT_PUBLIC_TELNYX_NUMBER || '';
-        setTelnyxNumber(outboundNumber);
+        // Clean up previous client if it exists
+        if (clientRef.current) {
+          console.log('[Dialer] Cleaning up previous client before reconnecting...');
+          const oldClient = clientRef.current;
+          clientRef.current = null;
+          setClient(null);
+          try {
+            oldClient.disconnect();
+          } catch (e) {}
+        }
 
-        // Populate devices list immediately
-        loadAudioDevices(false);
-
-        // Fetch JWT or direct SIP credentials from our API route
         const response = await fetch('/api/telnyx/token');
         if (!active) return;
 
@@ -428,7 +577,6 @@ export default function Dialer() {
         const data = await response.json();
         if (!active) return;
 
-        // Dynamically import WebRTC SDK
         const { TelnyxRTC } = await import('@telnyx/webrtc');
         if (!active) return;
 
@@ -444,14 +592,29 @@ export default function Dialer() {
 
         console.log('[Dialer] Initializing TelnyxRTC...');
         const rtcClient = new TelnyxRTC(clientOptions);
-        localClient = rtcClient;
         clientRef.current = rtcClient;
+        setClient(rtcClient);
 
         rtcClient.on('telnyx.ready', () => {
           if (!active) return;
           console.log('[Dialer] WebRTC signaling ready.');
           setSipState('connected');
           setErrorMessage(null);
+          reconnectAttemptsRef.current = 0;
+        });
+
+        rtcClient.on('telnyx.socket.close', () => {
+          if (!active) return;
+          console.warn('[Dialer] WebRTC socket closed.');
+          setSipState('disconnected');
+          scheduleReconnect();
+        });
+
+        rtcClient.on('telnyx.socket.error', (err: any) => {
+          if (!active) return;
+          console.error('[Dialer] WebRTC socket error:', err);
+          setSipState('error');
+          scheduleReconnect();
         });
 
         rtcClient.on('telnyx.error', (error: any) => {
@@ -480,7 +643,6 @@ export default function Dialer() {
             return;
           }
 
-          setSipState('error');
           setErrorMessage(error.message || 'Authentication or connection error.');
         });
 
@@ -609,34 +771,27 @@ export default function Dialer() {
         });
 
         rtcClient.connect();
-        setClient(rtcClient);
 
       } catch (err: any) {
         if (!active) return;
         console.error('[Dialer] Init error:', err);
         setSipState('error');
         setErrorMessage(err.message || 'Failed to initialize dialer.');
+        scheduleReconnect();
       }
     };
 
-    init();
+    establishConnection();
 
     return () => {
       active = false;
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
       audioService.stopRingback();
       stopMicCapture();
       if (inputVolumeAnalyserRef.current) inputVolumeAnalyserRef.current.stop();
       if (outputVolumeAnalyserRef.current) outputVolumeAnalyserRef.current.stop();
 
-      if (localClient) {
-        try {
-          console.log('[Dialer] Disconnecting TelnyxRTC client on unmount...');
-          localClient.disconnect();
-        } catch (e) {
-          console.warn('[Dialer] Failed to disconnect local client on unmount:', e);
-        }
-      }
       if (clientRef.current) {
         try {
           console.log('[Dialer] Disconnecting clientRef on unmount...');
@@ -671,6 +826,41 @@ export default function Dialer() {
       setEnableANS(localStorage.getItem('telnyx_ans') !== 'false');
       setEnableAGC(localStorage.getItem('telnyx_agc') !== 'false');
     }
+  }, []);
+
+  // Load status and balance from backend API route
+  useEffect(() => {
+    let active = true;
+    const fetchStatus = async () => {
+      try {
+        setFetchingStatus(true);
+        const response = await fetch('/api/telnyx/status');
+        if (!response.ok) {
+          throw new Error('Failed to fetch status');
+        }
+        const data = await response.json();
+        if (active) {
+          setBalance(data.balance || '0.00');
+          setNumberHealth(data.numberHealth || 'unknown');
+        }
+      } catch (err) {
+        console.error('[Dialer] Error fetching status:', err);
+      } finally {
+        if (active) {
+          setFetchingStatus(false);
+        }
+      }
+    };
+
+    fetchStatus();
+
+    // Refresh status and balance every 30 seconds
+    const intervalId = setInterval(fetchStatus, 30000);
+
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
   }, []);
 
   // Update browser tab title dynamically based on call state
@@ -992,6 +1182,15 @@ export default function Dialer() {
       }
     }
 
+    if (mixerContextRef.current && typeof (mixerContextRef.current as any).setSinkId === 'function') {
+      try {
+        await (mixerContextRef.current as any).setSinkId(deviceId);
+        console.log('[Mixer Speaker] AudioContext sink ID updated.');
+      } catch (e) {
+        console.error('Failed to change speaker on AudioContext:', e);
+      }
+    }
+
     if (currentCall && typeof currentCall.setAudioOutDevice === 'function') {
       try {
         await currentCall.setAudioOutDevice(deviceId);
@@ -1034,19 +1233,10 @@ export default function Dialer() {
     if (file) {
       ensureMixerContext();
       
-      // Store local file objects and URLs
-      const url = URL.createObjectURL(file);
-      
+      // Store filename metadata
       setSoundFiles(prev => {
         const updated = [...prev];
         updated[index] = file;
-        return updated;
-      });
-
-      setSoundUrls(prev => {
-        const updated = [...prev];
-        if (updated[index]) URL.revokeObjectURL(updated[index]!); // Revoke previous
-        updated[index] = url;
         return updated;
       });
 
@@ -1056,17 +1246,41 @@ export default function Dialer() {
         updated[index] = false;
         return updated;
       });
+
+      // Read file as ArrayBuffer and decode to AudioBuffer
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const arrayBuffer = event.target?.result as ArrayBuffer;
+        if (arrayBuffer) {
+          try {
+            const ctx = mixerContextRef.current;
+            if (ctx) {
+              const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+              soundBuffersRef.current[index] = audioBuffer;
+              console.log(`[Sound Pad] Decoded file for slot ${index + 1} successfully.`);
+            }
+          } catch (err) {
+            console.error('[Sound Pad] Error decoding audio file:', err);
+          }
+        }
+      };
+      reader.readAsArrayBuffer(file);
     }
   };
 
   // Play/Pause sound pad clip
   const togglePlaySound = (index: number) => {
     ensureMixerContext();
-    const audioEl = slotAudiosRef.current[index];
-    if (!audioEl) return;
+    const buffer = soundBuffersRef.current[index];
+    if (!buffer) return;
 
     if (playingStates[index]) {
-      audioEl.pause();
+      // Stop active sound source
+      const source = activeSourcesRef.current[index];
+      if (source) {
+        try { source.stop(); } catch (e) {}
+        activeSourcesRef.current[index] = null;
+      }
       setPlayingStates(prev => {
         const updated = [...prev];
         updated[index] = false;
@@ -1074,43 +1288,61 @@ export default function Dialer() {
       });
     } else {
       // Pause any other playing clips to keep sound simple and clean
-      slotAudiosRef.current.forEach((el, idx) => {
-        if (el && idx !== index) {
-          el.pause();
-          el.currentTime = 0;
+      for (let i = 0; i < 3; i++) {
+        if (activeSourcesRef.current[i]) {
+          try { activeSourcesRef.current[i]!.stop(); } catch (e) {}
+          activeSourcesRef.current[i] = null;
         }
-      });
-      setPlayingStates(prev => prev.map((_, i) => i === index ? false : _));
+      }
+      setPlayingStates(prev => prev.map((_, idx) => idx === index ? false : _));
 
-      audioEl.play()
-        .then(() => {
+      const ctx = mixerContextRef.current;
+      const dest = mixerDestinationRef.current;
+      const gainNode = slotGainsRef.current[index];
+      if (!ctx || !dest || !gainNode) return;
+
+      // Resume context if needed
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      activeSourcesRef.current[index] = source;
+
+      source.connect(gainNode);
+
+      source.onended = () => {
+        if (activeSourcesRef.current[index] === source) {
+          activeSourcesRef.current[index] = null;
           setPlayingStates(prev => {
             const updated = [...prev];
-            updated[index] = true;
+            updated[index] = false;
             return updated;
           });
-        })
-        .catch(err => console.error('[Sound Pad] Playback blocked or failed:', err));
+        }
+      };
+
+      source.start(0);
+      setPlayingStates(prev => {
+        const updated = [...prev];
+        updated[index] = true;
+        return updated;
+      });
     }
   };
 
   // Remove sound pad file from slot
   const removeSound = (index: number) => {
-    const audioEl = slotAudiosRef.current[index];
-    if (audioEl) {
-      audioEl.pause();
-      audioEl.src = '';
+    const source = activeSourcesRef.current[index];
+    if (source) {
+      try { source.stop(); } catch (e) {}
+      activeSourcesRef.current[index] = null;
     }
+    soundBuffersRef.current[index] = null;
 
     setSoundFiles(prev => {
       const updated = [...prev];
-      updated[index] = null;
-      return updated;
-    });
-
-    setSoundUrls(prev => {
-      const updated = [...prev];
-      if (updated[index]) URL.revokeObjectURL(updated[index]!);
       updated[index] = null;
       return updated;
     });
@@ -1271,6 +1503,44 @@ export default function Dialer() {
           >
             <Settings size={14} />
           </button>
+        </div>
+
+        {/* Status & Balance widgets */}
+        <div className="grid grid-cols-2 gap-3 mb-5 z-10 select-none">
+          {/* Balance Widget */}
+          <div className="flex items-center justify-between px-3.5 py-2.5 bg-zinc-900/30 border border-zinc-900/80 rounded-2xl">
+            <span className="text-[9px] uppercase font-bold text-zinc-500 tracking-wider">Balance</span>
+            <span className="text-xs font-bold font-mono text-zinc-300">
+              {fetchingStatus && balance === '0.00' ? '...' : `$${Number(balance).toFixed(2)}`}
+            </span>
+          </div>
+
+          {/* Number Health Widget */}
+          <div className="flex items-center justify-between px-3.5 py-2.5 bg-zinc-900/30 border border-zinc-900/80 rounded-2xl">
+            <span className="text-[9px] uppercase font-bold text-zinc-500 tracking-wider">Number</span>
+            <div className="flex items-center gap-1.5">
+              <span className={`relative flex h-1.5 w-1.5 rounded-full`}>
+                {numberHealth === 'healthy' && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                )}
+                {numberHealth === 'unconfigured' && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                )}
+                {numberHealth === 'inactive' && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                )}
+                <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${
+                  numberHealth === 'healthy' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' :
+                  numberHealth === 'unconfigured' ? 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]' :
+                  numberHealth === 'inactive' || numberHealth === 'not_found' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' :
+                  'bg-zinc-600'
+                }`}></span>
+              </span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-300">
+                {numberHealth}
+              </span>
+            </div>
+          </div>
         </div>
 
         {/* Toggle Settings Panel vs Keypad */}
@@ -1664,19 +1934,7 @@ export default function Dialer() {
               key={index}
               className="p-3.5 rounded-2xl bg-zinc-900/10 border border-zinc-900/50 hover:border-zinc-800/40 transition-all flex flex-col gap-2 relative overflow-hidden"
             >
-              {/* Invisible native audio tags for live call mixing */}
-              <audio 
-                ref={(el) => { slotAudiosRef.current[index] = el; }} 
-                src={soundUrls[index] || undefined} 
-                onEnded={() => {
-                  setPlayingStates(prev => {
-                    const updated = [...prev];
-                    updated[index] = false;
-                    return updated;
-                  });
-                }}
-                className="hidden" 
-              />
+              {/* Invisible audio node is handled in-memory via AudioBuffer */}
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
