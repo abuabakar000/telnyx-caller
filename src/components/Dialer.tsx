@@ -63,9 +63,36 @@ const modifySdp = (sdp: string): string => {
   });
 };
 
+// Shared active mixed stream reference for getUserMedia hook
+let activeMixedStream: MediaStream | null = null;
+
 // Global WebRTC monkey patch for SDP capture
 if (typeof window !== 'undefined') {
   try {
+    // Monkey patch getUserMedia to redirect SDK media capture requests to our mixed stream
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async function (constraints) {
+        if (constraints && typeof constraints.audio === 'object' && constraints.audio !== null && (constraints.audio as any)._isMixerSource) {
+          const cleanConstraints = { ...constraints };
+          cleanConstraints.audio = { ...((constraints as any).audio) };
+          delete (cleanConstraints.audio as any)._isMixerSource;
+          return originalGetUserMedia(cleanConstraints);
+        }
+        if (constraints && (constraints as any)._isMixerSource) {
+          const cleanConstraints = { ...constraints };
+          delete (cleanConstraints as any)._isMixerSource;
+          return originalGetUserMedia(cleanConstraints);
+        }
+        if (activeMixedStream) {
+          console.log('[getUserMedia Hook] Redirecting media capture to active mixed stream.');
+          return activeMixedStream;
+        }
+        return originalGetUserMedia(constraints);
+      };
+      console.log('[getUserMedia Hook] navigator.mediaDevices.getUserMedia monkey patch installed.');
+    }
+
     const pcProto = RTCPeerConnection.prototype as any;
 
     const originalCreateOffer = pcProto.createOffer;
@@ -417,7 +444,10 @@ export default function Dialer() {
       
       // Capture mic stream
       const constraints = {
-        audio: getAudioConstraints(selectedMic, enableAEC, enableANS, enableAGC),
+        audio: {
+          ...getAudioConstraints(selectedMic, enableAEC, enableANS, enableAGC),
+          _isMixerSource: true
+        } as any,
         video: false
       };
       const micStream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -460,6 +490,7 @@ export default function Dialer() {
       compressor.connect(micGain);
       micGain.connect(dest);
 
+      activeMixedStream = dest.stream;
       return dest.stream;
     } catch (err) {
       console.error('[Mixer] Failed to construct mixed audio stream:', err);
@@ -469,6 +500,7 @@ export default function Dialer() {
 
   // Cleanup mic capture and resources
   const stopMicCapture = () => {
+    activeMixedStream = null;
     if (micSourceRef.current) {
       try {
         micSourceRef.current.disconnect();
@@ -489,7 +521,7 @@ export default function Dialer() {
       if (typeof window === 'undefined') return;
       
       if (requestPermissions) {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
+        await navigator.mediaDevices.getUserMedia({ audio: { _isMixerSource: true } as any });
         setDevicePermissionGranted(true);
       }
 
@@ -1115,7 +1147,10 @@ export default function Dialer() {
     stopSettingsMicTest();
     try {
       const constraints = {
-        audio: getAudioConstraints(micId, enableAEC, enableANS, enableAGC),
+        audio: {
+          ...getAudioConstraints(micId, enableAEC, enableANS, enableAGC),
+          _isMixerSource: true
+        } as any,
         video: false
       };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
