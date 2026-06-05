@@ -437,8 +437,28 @@ export default function Dialer() {
       ensureMixerContext();
       
       const ctx = mixerContextRef.current;
-      const dest = mixerDestinationRef.current;
-      if (!ctx || !dest) return null;
+      if (!ctx) return null;
+
+      // Re-create the MediaStreamAudioDestinationNode to ensure a fresh, active audio track for this call.
+      // This prevents the "ended track" issue when the SDK stops the track of the previous call's stream.
+      const dest = ctx.createMediaStreamDestination();
+      mixerDestinationRef.current = dest;
+
+      // Ensure slot gain nodes are set up and connected to the new destination
+      for (let i = 0; i < 3; i++) {
+        let gainNode = slotGainsRef.current[i];
+        if (!gainNode) {
+          gainNode = ctx.createGain();
+          gainNode.gain.value = soundPadVolume;
+          slotGainsRef.current[i] = gainNode;
+        } else {
+          try {
+            gainNode.disconnect();
+          } catch (e) {}
+        }
+        gainNode.connect(dest);
+        gainNode.connect(ctx.destination);
+      }
 
       console.log('[Mixer] Capturing user mic and merging stream channels...');
       
@@ -501,6 +521,12 @@ export default function Dialer() {
   // Cleanup mic capture and resources
   const stopMicCapture = () => {
     activeMixedStream = null;
+    if (micGainNodeRef.current) {
+      try {
+        micGainNodeRef.current.disconnect();
+      } catch (e) {}
+      micGainNodeRef.current = null;
+    }
     if (micSourceRef.current) {
       try {
         micSourceRef.current.disconnect();
