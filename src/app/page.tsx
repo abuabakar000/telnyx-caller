@@ -7,7 +7,7 @@ import { PhoneCall } from 'lucide-react';
 const Dialer = dynamic(() => import('@/components/Dialer'), {
   ssr: false,
   loading: () => (
-    <div className="w-full max-w-md bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2.5rem] p-8 flex flex-col justify-center items-center min-h-[500px]">
+    <div className="w-full max-w-md bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2.5rem] p-6 sm:p-8 flex flex-col justify-center items-center min-h-[500px]">
       <div className="relative flex items-center justify-center">
         <div className="absolute w-12 h-12 border-2 border-zinc-800 rounded-full animate-ping" />
         <PhoneCall className="w-6 h-6 text-zinc-500 animate-pulse" />
@@ -21,7 +21,7 @@ const Dialer = dynamic(() => import('@/components/Dialer'), {
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-black text-zinc-100 flex flex-col items-center justify-center p-4 relative selection:bg-zinc-800">
+    <div className="min-h-screen bg-black text-zinc-100 flex flex-col items-center justify-center p-2 sm:p-4 relative selection:bg-zinc-800">
       
       {/* Sleek, deep background design */}
       <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(24,24,27,0.4)_0%,transparent_100%)] pointer-events-none" />

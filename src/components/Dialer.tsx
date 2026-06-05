@@ -1394,10 +1394,10 @@ export default function Dialer() {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[20rem_22rem_20rem] items-stretch justify-center gap-6 max-w-6xl w-full mx-auto p-4 z-10">
+    <div className="grid grid-cols-1 lg:grid-cols-[20rem_22rem_20rem] items-stretch justify-center gap-6 max-w-6xl w-full mx-auto p-2 sm:p-4 z-10">
       
       {/* CALL HISTORY PANEL (LEFT) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-6 flex flex-col min-h-[480px]">
+      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-6 flex flex-col min-h-[480px]">
         <div className="flex items-center justify-between mb-4 pb-2 border-b border-zinc-900">
           <div className="flex items-center gap-2">
             <Clock size={14} className="text-zinc-500" />
@@ -1468,7 +1468,7 @@ export default function Dialer() {
       </div>
 
       {/* DIALER PANEL (MIDDLE) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-8 flex flex-col relative overflow-hidden min-h-[480px]">
+      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-8 flex flex-col relative overflow-hidden min-h-[480px]">
         
         {/* Background light glow */}
         <div className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-zinc-800/5 via-transparent to-transparent pointer-events-none" />
@@ -1508,7 +1508,7 @@ export default function Dialer() {
         {/* Status & Balance widgets */}
         <div className="grid grid-cols-2 gap-3 mb-5 z-10 select-none">
           {/* Balance Widget */}
-          <div className="flex items-center justify-between px-3.5 py-2.5 bg-zinc-900/30 border border-zinc-900/80 rounded-2xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3.5 py-2 sm:py-2.5 bg-zinc-900/30 border border-zinc-900/80 rounded-2xl gap-1 sm:gap-0">
             <span className="text-[9px] uppercase font-bold text-zinc-500 tracking-wider">Balance</span>
             <span className="text-xs font-bold font-mono text-zinc-300">
               {fetchingStatus && balance === '0.00' ? '...' : `$${Number(balance).toFixed(2)}`}
@@ -1516,7 +1516,7 @@ export default function Dialer() {
           </div>
 
           {/* Number Health Widget */}
-          <div className="flex items-center justify-between px-3.5 py-2.5 bg-zinc-900/30 border border-zinc-900/80 rounded-2xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3.5 py-2 sm:py-2.5 bg-zinc-900/30 border border-zinc-900/80 rounded-2xl gap-1 sm:gap-0">
             <span className="text-[9px] uppercase font-bold text-zinc-500 tracking-wider">Number</span>
             <div className="flex items-center gap-1.5">
               <span className={`relative flex h-1.5 w-1.5 rounded-full`}>
@@ -1757,7 +1757,7 @@ export default function Dialer() {
             )}
 
             {/* Dialer Keypad 3x4 Grid */}
-            <div className="grid grid-cols-3 gap-y-3.5 gap-x-5 justify-items-center py-2">
+            <div className="grid grid-cols-3 gap-y-3 gap-x-3 sm:gap-x-5 justify-items-center py-2">
               {[
                 { digit: '1', letters: ' ' },
                 { digit: '2', letters: 'A B C' },
@@ -1885,7 +1885,7 @@ export default function Dialer() {
       </div>
 
       {/* SOUND PAD PANEL (RIGHT) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-6 flex flex-col min-h-[480px]">
+      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-6 flex flex-col min-h-[480px]">
         <div className="flex items-center justify-between mb-4 pb-2 border-b border-zinc-900">
           <div className="flex items-center gap-2">
             <Volume2 size={14} className="text-zinc-500" />
