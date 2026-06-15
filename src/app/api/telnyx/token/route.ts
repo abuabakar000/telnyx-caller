@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const apiKey = process.env.TELNYX_API_KEY;
+    const apiKey = process.env.TELNYX_CALL_API_KEY || process.env.TELNYX_API_KEY;
     const sipUsername = process.env.TELNYX_SIP_USERNAME;
     const sipPassword = process.env.TELNYX_SIP_PASSWORD;
 

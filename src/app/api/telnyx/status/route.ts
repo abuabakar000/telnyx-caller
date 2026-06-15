@@ -4,7 +4,9 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const apiKey = process.env.TELNYX_API_KEY;
+    const apiKey = process.env.TELNYX_API_KEY && process.env.TELNYX_API_KEY.includes('_')
+      ? process.env.TELNYX_API_KEY
+      : (process.env.TELNYX_CALL_API_KEY || process.env.TELNYX_API_KEY);
     const telnyxNumber = process.env.NEXT_PUBLIC_TELNYX_NUMBER;
 
     if (!apiKey) {

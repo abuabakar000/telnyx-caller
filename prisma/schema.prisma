@@ -1,0 +1,88 @@
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Contact {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  phoneNumber String   @unique
+  tags        String[]
+  notes       String?
+  email       String?
+  company     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Message {
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  direction        String   // "inbound" | "outbound"
+  text             String
+  sender           String
+  recipient        String
+  status           String   // "sent" | "delivered" | "failed" | "received"
+  timestamp        DateTime @default(now())
+  telnyxMessageId  String?
+  carrier          String?
+  errorReason      String?
+  contactId        String?  @db.ObjectId
+}
+
+model Template {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  content   String
+  createdAt DateTime @default(now())
+}
+
+model HealthLog {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  totalSent      Int      @default(0)
+  delivered      Int      @default(0)
+  failed         Int      @default(0)
+  optOut         Int      @default(0)
+  carrierBlocked Int      @default(0)
+  updatedAt      DateTime @updatedAt
+}
+
+model CarrierLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  messageId  String?
+  phoneNumber String
+  carrier    String?
+  reason     String
+  code       String?
+  timestamp  DateTime @default(now())
+}
+
+model Lead {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  firstName   String
+  lastName    String
+  phone       String    @unique
+  company     String?
+  email       String?
+  status      String    @default("New")  // New | Contacted | Callback | Interested | Closed
+  disposition String?                    // Interested | Callback | No Answer | VM Left | Not Interested
+  callbackAt  DateTime?
+  notes       String?
+  importBatch String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model LeadEvent {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  leadId      String   @db.ObjectId
+  type        String   // call | sms | note
+  direction   String?  // inbound | outbound
+  disposition String?
+  duration    Int?
+  text        String?
+  timestamp   DateTime @default(now())
+}

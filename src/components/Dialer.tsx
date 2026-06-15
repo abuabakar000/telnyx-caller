@@ -19,7 +19,10 @@ import {
   Play,
   Pause,
   Upload,
-  RotateCcw
+  RotateCcw,
+  Voicemail,
+  FileText,
+  Building2
 } from 'lucide-react';
 import { audioService } from '@/utils/audio';
 
@@ -85,7 +88,7 @@ if (typeof window !== 'undefined') {
           return originalGetUserMedia(cleanConstraints);
         }
         if (activeMixedStream) {
-          console.log('[getUserMedia Hook] Redirecting media capture to active mixed stream.');
+          console.log('[getUserMedia Hook] Redirecting media capture to active mixed stream:', activeMixedStream.id, 'Tracks:', activeMixedStream.getAudioTracks().map(t => ({ id: t.id, label: t.label, enabled: t.enabled, readyState: t.readyState })));
           return activeMixedStream;
         }
         return originalGetUserMedia(constraints);
@@ -218,7 +221,26 @@ const getAudioConstraints = (micId?: string, aec = true, ans = true, agc = true)
   };
 };
 
-export default function Dialer() {
+// Active lead info passed in from parent power dialer
+export interface ActiveLead {
+  id: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  company?: string | null;
+}
+
+export default function Dialer({
+  activeLead,
+  onCallEnded,
+  onScriptToggle,
+  scriptOpen,
+}: {
+  activeLead?: ActiveLead | null;
+  onCallEnded?: (duration: number) => void;
+  onScriptToggle?: () => void;
+  scriptOpen?: boolean;
+}) {
   // WebRTC & Connection State
   const [client, setClient] = useState<any>(null);
   const [currentCall, setCurrentCall] = useState<any>(null);
@@ -250,12 +272,13 @@ export default function Dialer() {
   const [callHistory, setCallHistory] = useState<CallLog[]>([]);
   const [callDuration, setCallDuration] = useState(0);
 
-  // Sound Pad State
-  const [soundFiles, setSoundFiles] = useState<(File | null)[]>([null, null, null]);
-  const [playingStates, setPlayingStates] = useState<boolean[]>([false, false, false]);
+  // Sound Pad State — 4 slots (0-2 regular, 3 = VM Drop)
+  const [soundFiles, setSoundFiles] = useState<(File | null)[]>([null, null, null, null]);
+  const [playingStates, setPlayingStates] = useState<boolean[]>([false, false, false, false]);
   const [soundPadVolume, setSoundPadVolume] = useState(0.5);
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [settingsMicVolume, setSettingsMicVolume] = useState(0);
+  const [vmDropping, setVmDropping] = useState(false);
 
   // Account status and health
   const [balance, setBalance] = useState<string>('0.00');
@@ -289,9 +312,9 @@ export default function Dialer() {
   const mixerDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
-  const soundBuffersRef = useRef<(AudioBuffer | null)[]>([null, null, null]);
-  const activeSourcesRef = useRef<(AudioBufferSourceNode | null)[]>([null, null, null]);
-  const slotGainsRef = useRef<any[]>([null, null, null]);
+  const soundBuffersRef = useRef<(AudioBuffer | null)[]>([null, null, null, null]);
+  const activeSourcesRef = useRef<(AudioBufferSourceNode | null)[]>([null, null, null, null]);
+  const slotGainsRef = useRef<any[]>([null, null, null, null]);
   const micGainNodeRef = useRef<GainNode | null>(null);
 
   // Helper to format phone number progressively for display
@@ -416,7 +439,7 @@ export default function Dialer() {
 
       // Ensure slot gain nodes are set up and connected to output destinations
       if (dest) {
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < 4; i++) {
           if (!slotGainsRef.current[i]) {
             const gainNode = ctx.createGain();
             gainNode.gain.value = soundPadVolume;
@@ -445,7 +468,7 @@ export default function Dialer() {
       mixerDestinationRef.current = dest;
 
       // Ensure slot gain nodes are set up and connected to the new destination
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 4; i++) {
         let gainNode = slotGainsRef.current[i];
         if (!gainNode) {
           gainNode = ctx.createGain();
@@ -816,6 +839,11 @@ export default function Dialer() {
                   return updated;
                 });
 
+                // Notify parent power dialer of call end
+                if (onCallEnded) {
+                  onCallEnded(duration || 0);
+                }
+
                 // Clear call states
                 setTimeout(() => {
                   setCallState('idle');
@@ -1123,6 +1151,11 @@ export default function Dialer() {
           return updated;
         });
 
+        // Notify parent
+        if (onCallEnded) {
+          onCallEnded(duration || 0);
+        }
+
         setCallState('idle');
         setCurrentCall(null);
         setCallDuration(0);
@@ -1331,11 +1364,16 @@ export default function Dialer() {
 
   // Play/Pause sound pad clip
   const togglePlaySound = (index: number) => {
+    console.log(`[Sound Pad Debug] Slot ${index + 1} clicked. CallState: ${callState}`);
     ensureMixerContext();
     const buffer = soundBuffersRef.current[index];
-    if (!buffer) return;
+    if (!buffer) {
+      console.warn(`[Sound Pad Debug] No audio buffer found for Slot ${index + 1}. Make sure a file is uploaded.`);
+      return;
+    }
 
     if (playingStates[index]) {
+      console.log(`[Sound Pad Debug] Stopping play for Slot ${index + 1}`);
       // Stop active sound source
       const source = activeSourcesRef.current[index];
       if (source) {
@@ -1348,6 +1386,7 @@ export default function Dialer() {
         return updated;
       });
     } else {
+      console.log(`[Sound Pad Debug] Initiating play for Slot ${index + 1}`);
       // Pause any other playing clips to keep sound simple and clean
       for (let i = 0; i < 3; i++) {
         if (activeSourcesRef.current[i]) {
@@ -1360,11 +1399,19 @@ export default function Dialer() {
       const ctx = mixerContextRef.current;
       const dest = mixerDestinationRef.current;
       const gainNode = slotGainsRef.current[index];
-      if (!ctx || !dest || !gainNode) return;
+      
+      console.log(`[Sound Pad Debug] Web Audio Status: ctxState=${ctx?.state}, destStreamExists=${!!dest?.stream}, gainNodeExists=${!!gainNode}`);
+      
+      if (!ctx || !dest || !gainNode) {
+        console.error(`[Sound Pad Debug] Web Audio nodes are not initialized! ctx=${!!ctx}, dest=${!!dest}, gainNode=${!!gainNode}`);
+        return;
+      }
 
       // Resume context if needed
       if (ctx.state === 'suspended') {
-        ctx.resume();
+        ctx.resume().then(() => {
+          console.log('[Sound Pad Debug] AudioContext resumed successfully.');
+        });
       }
 
       const source = ctx.createBufferSource();
@@ -1374,6 +1421,7 @@ export default function Dialer() {
       source.connect(gainNode);
 
       source.onended = () => {
+        console.log(`[Sound Pad Debug] Slot ${index + 1} playback ended natively.`);
         if (activeSourcesRef.current[index] === source) {
           activeSourcesRef.current[index] = null;
           setPlayingStates(prev => {
@@ -1382,9 +1430,20 @@ export default function Dialer() {
             return updated;
           });
         }
+        // VM Drop slot (index 3): auto-hangup after playback ends
+        if (index === 3) {
+          console.log('[VM Drop] Playback ended — auto-hanging up call.');
+          setVmDropping(false);
+          setTimeout(() => {
+            if (currentCallRef.current) {
+              handleHangup();
+            }
+          }, 500);
+        }
       };
 
       source.start(0);
+      console.log(`[Sound Pad Debug] Slot ${index + 1} playback started successfully.`);
       setPlayingStates(prev => {
         const updated = [...prev];
         updated[index] = true;
@@ -1456,7 +1515,6 @@ export default function Dialer() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[20rem_22rem_20rem] items-stretch justify-center gap-6 max-w-6xl w-full mx-auto p-2 sm:p-4 z-10">
-      
       {/* CALL HISTORY PANEL (LEFT) */}
       <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-6 flex flex-col min-h-[480px]">
         <div className="flex items-center justify-between mb-4 pb-2 border-b border-zinc-900">
@@ -1552,18 +1610,35 @@ export default function Dialer() {
             </span>
           </div>
 
-          {/* Toggle Settings Icon */}
-          <button 
-            onClick={toggleSettings}
-            className={`p-1.5 rounded-full border transition-all duration-200 ${
-              showSettings 
-                ? 'bg-zinc-800 border-zinc-700 text-zinc-100' 
-                : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
-            }`}
-            title="Audio Settings"
-          >
-            <Settings size={14} />
-          </button>
+          {/* Header Icons Container */}
+          <div className="flex items-center gap-2">
+            {/* Call Script Toggle */}
+            {onScriptToggle && (
+              <button
+                onClick={onScriptToggle}
+                className={`p-1.5 rounded-full border transition-all duration-200 ${
+                  scriptOpen
+                    ? 'bg-zinc-800 border-zinc-700 text-zinc-100'
+                    : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
+                }`}
+                title="Call Script"
+              >
+                <FileText size={14} />
+              </button>
+            )}
+            {/* Toggle Settings Icon */}
+            <button 
+              onClick={toggleSettings}
+              className={`p-1.5 rounded-full border transition-all duration-200 ${
+                showSettings 
+                  ? 'bg-zinc-800 border-zinc-700 text-zinc-100' 
+                  : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
+              }`}
+              title="Audio Settings"
+            >
+              <Settings size={14} />
+            </button>
+          </div>
         </div>
 
         {/* Status & Balance widgets */}
@@ -1748,10 +1823,32 @@ export default function Dialer() {
             
             {/* Number Input & Status displays */}
             <div className="text-center flex flex-col justify-center items-center py-4 min-h-[110px] select-none">
+              {/* Active Lead HUD */}
+              {activeLead && callState !== 'idle' && (
+                <div className="mb-2 px-3 py-2 bg-[#00c896]/5 border border-[#00c896]/20 rounded-2xl text-center">
+                  <div className="flex items-center justify-center gap-2">
+                    <div className="w-6 h-6 rounded-full bg-[#00c896]/20 text-[#00c896] text-[9px] font-bold flex items-center justify-center">
+                      {[activeLead.firstName[0], activeLead.lastName[0]].filter(Boolean).join('').toUpperCase() || '#'}
+                    </div>
+                    <div className="text-left">
+                      <p className="text-[11px] font-bold text-[#00c896]">{activeLead.firstName} {activeLead.lastName}</p>
+                      {activeLead.company && (
+                        <p className="text-[9px] text-zinc-500 flex items-center gap-0.5">
+                          <Building2 size={8} /> {activeLead.company}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Outbound tag */}
               {callState === 'idle' && (
                 <div className="text-[10px] font-semibold tracking-wider text-zinc-600 uppercase mb-1">
-                  Outbound Caller: {telnyxNumber || 'Not configured'}
+                  {activeLead
+                    ? <span className="text-[#00c896]/60">Next: {activeLead.firstName} {activeLead.lastName}</span>
+                    : `Outbound Caller: ${telnyxNumber || 'Not configured'}`
+                  }
                 </div>
               )}
 
@@ -1988,7 +2085,7 @@ export default function Dialer() {
           </div>
         </div>
 
-        {/* Sound Pad Slots */}
+        {/* Sound Pad Slots — 3 regular + 1 VM Drop */}
         <div className="flex-grow space-y-4 max-h-[350px] overflow-y-auto scrollbar-none">
           {[0, 1, 2].map((index) => (
             <div 
@@ -2058,6 +2155,71 @@ export default function Dialer() {
               )}
             </div>
           ))}
+
+          {/* VM DROP SLOT */}
+          <div className="p-3.5 rounded-2xl bg-amber-950/10 border border-amber-900/30 hover:border-amber-900/50 transition-all flex flex-col gap-2 relative overflow-hidden">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <Voicemail size={11} className="text-amber-400" />
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 select-none">VM Drop</span>
+                <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-amber-950/30 border border-amber-900/30 text-amber-600 select-none">V</span>
+              </div>
+              {soundFiles[3] && (
+                <button
+                  onClick={() => removeSound(3)}
+                  className="text-zinc-600 hover:text-red-400 transition-colors"
+                  title="Unload VM file"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {soundFiles[3] ? (
+              <div className="flex items-center justify-between gap-2.5">
+                <div className="text-left flex-grow min-w-0">
+                  <p className="text-[11px] font-semibold text-amber-300 truncate select-none">{soundFiles[3]?.name}</p>
+                  <span className="text-[9px] text-zinc-600 select-none">Auto-hangs up after playback</span>
+                </div>
+                <button
+                  onClick={() => {
+                    if (callState !== 'active') return;
+                    setVmDropping(true);
+                    togglePlaySound(3);
+                    // Watch for playback end via source.onended — handled in togglePlaySound
+                  }}
+                  disabled={callState !== 'active' || vmDropping}
+                  className={`w-9 h-9 rounded-full flex items-center justify-center transition-all border ${
+                    vmDropping
+                      ? 'bg-amber-500 text-black animate-pulse border-amber-400'
+                      : callState === 'active'
+                        ? 'bg-amber-950/30 border-amber-900/50 text-amber-400 hover:bg-amber-900/40'
+                        : 'bg-zinc-900 border-zinc-850 text-zinc-600 cursor-not-allowed'
+                  }`}
+                  title={callState !== 'active' ? 'Active call required' : 'Drop Voicemail'}
+                >
+                  <Voicemail size={14} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center">
+                <label
+                  htmlFor="vm-drop-file"
+                  className="w-full border border-dashed border-amber-900/30 hover:border-amber-900/50 hover:bg-amber-950/10 transition-all rounded-xl p-3.5 flex flex-col items-center gap-1.5 cursor-pointer text-amber-700 hover:text-amber-500 select-none"
+                >
+                  <Upload size={14} className="animate-pulse" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">Upload VM Audio</span>
+                  <input
+                    id="vm-drop-file"
+                    type="file"
+                    accept="audio/*"
+                    onChange={(e) => handleSoundUpload(3, e)}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
