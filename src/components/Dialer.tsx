@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Phone, 
   PhoneOff, 
@@ -22,9 +22,15 @@ import {
   RotateCcw,
   Voicemail,
   FileText,
-  Building2
+  Building2,
+  Send,
+  MessageSquare,
+  Loader2
 } from 'lucide-react';
 import { audioService } from '@/utils/audio';
+import { sendSMS, getMessagesByPhone } from '@/app/actions/sms';
+import { getTemplates } from '@/app/actions/templates';
+import { pusherClient } from '@/utils/pusher-client';
 
 interface CallLog {
   id: string;
@@ -280,6 +286,15 @@ export default function Dialer({
   const [settingsMicVolume, setSettingsMicVolume] = useState(0);
   const [vmDropping, setVmDropping] = useState(false);
 
+  // Quick SMS State
+  const [smsMessages, setSmsMessages] = useState<any[]>([]);
+  const [smsInput, setSmsInput] = useState('');
+  const [isSendingSms, setIsSendingSms] = useState(false);
+  const [smsTemplates, setSmsTemplates] = useState<any[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
   // Account status and health
   const [balance, setBalance] = useState<string>('0.00');
   const [numberHealth, setNumberHealth] = useState<string>('unknown');
@@ -304,6 +319,7 @@ export default function Dialer({
   const inputVolumeAnalyserRef = useRef<any>(null);
   const outputVolumeAnalyserRef = useRef<any>(null);
   const clientRef = useRef<any>(null);
+  const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const settingsMicStreamRef = useRef<MediaStream | null>(null);
   const settingsMicAnalyserRef = useRef<any>(null);
 
@@ -644,6 +660,10 @@ export default function Dialer({
           const oldClient = clientRef.current;
           clientRef.current = null;
           setClient(null);
+          if (pingIntervalRef.current) {
+            clearInterval(pingIntervalRef.current);
+            pingIntervalRef.current = null;
+          }
           try {
             oldClient.disconnect();
           } catch (e) {}
@@ -671,7 +691,15 @@ export default function Dialer({
           throw new Error('No valid authentication credentials returned from server.');
         }
 
-        console.log('[Dialer] Initializing TelnyxRTC...');
+        // Configure SDK-level keep-alive and reconnection capabilities
+        clientOptions.autoReconnect = true;
+        clientOptions.keepConnectionAliveOnSocketClose = true;
+        clientOptions.maxReconnectAttempts = 20;
+
+        console.log('[Dialer] Initializing TelnyxRTC with parameters:', {
+          autoReconnect: clientOptions.autoReconnect,
+          keepConnectionAliveOnSocketClose: clientOptions.keepConnectionAliveOnSocketClose
+        });
         const rtcClient = new TelnyxRTC(clientOptions);
         clientRef.current = rtcClient;
         setClient(rtcClient);
@@ -682,9 +710,55 @@ export default function Dialer({
           setSipState('connected');
           setErrorMessage(null);
           reconnectAttemptsRef.current = 0;
+
+          // Start signaling health monitor if available in SDK
+          if (typeof rtcClient.startSignalingHealthMonitor === 'function') {
+            try {
+              rtcClient.startSignalingHealthMonitor();
+              console.log('[Dialer] SDK Signaling Health Monitor started.');
+            } catch (e) {
+              console.warn('[Dialer] Failed to start SDK Signaling Health Monitor:', e);
+            }
+          }
+
+          // Setup manual heartbeat ping to prevent proxy/NAT idle timeouts
+          if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+          pingIntervalRef.current = setInterval(() => {
+            if (rtcClient && rtcClient.connected) {
+              try {
+                const voiceSdkId = sessionStorage.getItem('telnyx-voice-sdk-id') || '';
+                const pingMessage = {
+                  jsonrpc: '2.0',
+                  id: 'hb_' + Math.random().toString(36).substring(2, 11),
+                  method: 'telnyx_rtc.ping',
+                  voice_sdk_id: voiceSdkId,
+                  params: {}
+                };
+                
+                // Use executeRaw if available, otherwise direct WebSocket send
+                if (typeof rtcClient.executeRaw === 'function') {
+                  rtcClient.executeRaw(JSON.stringify(pingMessage));
+                } else {
+                  const conn = rtcClient.connection as any;
+                  if (conn && typeof conn.sendRawText === 'function') {
+                    conn.sendRawText(JSON.stringify(pingMessage));
+                  } else if (conn && conn._wsClient && conn._wsClient.readyState === 1) {
+                    conn._wsClient.send(JSON.stringify(pingMessage));
+                  }
+                }
+                console.log('[Dialer] Sent signaling heartbeat ping.');
+              } catch (err) {
+                console.warn('[Dialer] Heartbeat ping failed:', err);
+              }
+            }
+          }, 15000); // 15 seconds is well under typical 30-second proxy/NAT limits
         });
 
         rtcClient.on('telnyx.socket.close', () => {
+          if (pingIntervalRef.current) {
+            clearInterval(pingIntervalRef.current);
+            pingIntervalRef.current = null;
+          }
           if (!active) return;
           console.warn('[Dialer] WebRTC socket closed.');
           setSipState('disconnected');
@@ -692,6 +766,10 @@ export default function Dialer({
         });
 
         rtcClient.on('telnyx.socket.error', (err: any) => {
+          if (pingIntervalRef.current) {
+            clearInterval(pingIntervalRef.current);
+            pingIntervalRef.current = null;
+          }
           if (!active) return;
           console.error('[Dialer] WebRTC socket error:', err);
           setSipState('error');
@@ -873,6 +951,10 @@ export default function Dialer({
       active = false;
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
+      if (pingIntervalRef.current) {
+        clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = null;
+      }
       audioService.stopRingback();
       stopMicCapture();
       if (inputVolumeAnalyserRef.current) inputVolumeAnalyserRef.current.stop();
@@ -914,6 +996,135 @@ export default function Dialer({
     }
   }, []);
 
+  // load SMS history helper
+  const loadSmsHistory = useCallback(async (phoneToLoad: string) => {
+    if (!phoneToLoad) return;
+    const cleaned = phoneToLoad.replace(/[^0-9+]/g, '');
+    if (cleaned.length < 10) return;
+    try {
+      const res = await getMessagesByPhone(cleaned);
+      if (res.success && res.messages) {
+        setSmsMessages(res.messages);
+      }
+    } catch (err) {
+      console.warn('[Dialer SMS] Failed to load messages:', err);
+    }
+  }, []);
+
+  // Load templates on mount
+  useEffect(() => {
+    getTemplates().then((res: any) => {
+      if (res.success && res.templates) {
+        setSmsTemplates(res.templates);
+      }
+    });
+  }, []);
+
+  // Fetch SMS history when activeLead or typed phone number changes
+  useEffect(() => {
+    const activeNum = activeLead?.phone || phoneNumber;
+    if (activeNum && activeNum.replace(/[^0-9+]/g, '').length >= 10) {
+      loadSmsHistory(activeNum);
+    } else {
+      setSmsMessages([]);
+    }
+  }, [activeLead, phoneNumber, loadSmsHistory]);
+
+  // Sync real-time messages via Pusher
+  useEffect(() => {
+    if (!pusherClient) return;
+    const channel = pusherClient.subscribe('sms-channel');
+
+    const handleNewMessage = (data: any) => {
+      const activeNum = activeLead?.phone || phoneNumber;
+      if (!activeNum) return;
+      const cleanedActive = activeNum.replace(/[^0-9+]/g, '');
+      const cleanedMsgRecipient = (data.recipient || '').replace(/[^0-9+]/g, '');
+      const cleanedMsgSender = (data.sender || '').replace(/[^0-9+]/g, '');
+
+      if (cleanedMsgRecipient.includes(cleanedActive) || cleanedMsgSender.includes(cleanedActive)) {
+        setSmsMessages(prev => {
+          if (prev.some(m => m.id === data.id || (m.telnyxMessageId && m.telnyxMessageId === data.telnyxMessageId))) {
+            return prev;
+          }
+          return [...prev, data];
+        });
+      }
+    };
+
+    const handleStatusUpdate = (data: any) => {
+      const activeNum = activeLead?.phone || phoneNumber;
+      if (!activeNum) return;
+      const cleanedActive = activeNum.replace(/[^0-9+]/g, '');
+      const cleanedMsgRecipient = (data.recipient || '').replace(/[^0-9+]/g, '');
+      const cleanedMsgSender = (data.sender || '').replace(/[^0-9+]/g, '');
+
+      if (cleanedMsgRecipient.includes(cleanedActive) || cleanedMsgSender.includes(cleanedActive)) {
+        setSmsMessages(prev => prev.map(m => m.id === data.id ? { ...m, ...data } : m));
+      }
+    };
+
+    channel.bind('new-message', handleNewMessage);
+    channel.bind('message-status-update', handleStatusUpdate);
+
+    return () => {
+      channel.unbind('new-message', handleNewMessage);
+      channel.unbind('message-status-update', handleStatusUpdate);
+    };
+  }, [activeLead, phoneNumber]);
+
+  // Scroll to bottom of message thread
+  useEffect(() => {
+    messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [smsMessages]);
+
+  // Auto-resize SMS input textarea as user types
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+    }
+  }, [smsInput]);
+
+  const handleTemplateChange = (templateId: string) => {
+    setSelectedTemplateId(templateId);
+    if (!templateId) return;
+
+    const template = smsTemplates.find(t => t.id === templateId);
+    if (template) {
+      let content = template.content;
+      if (activeLead) {
+        content = content
+          .replace(/\{firstName\}/g, activeLead.firstName || '')
+          .replace(/\{companyName\}/g, activeLead.company || '');
+      }
+      setSmsInput(content);
+    }
+  };
+
+  const handleSendSms = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const activeNum = activeLead?.phone || phoneNumber;
+    if (!activeNum || !smsInput.trim()) return;
+
+    const cleaned = activeNum.replace(/[^0-9+]/g, '');
+    if (cleaned.length < 10) return;
+
+    setIsSendingSms(true);
+    const res = await sendSMS(cleaned, smsInput.trim());
+    setIsSendingSms(false);
+
+    if (res.success) {
+      setSmsInput('');
+      setSelectedTemplateId('');
+      loadSmsHistory(cleaned);
+    } else {
+      alert(res.error || 'Failed to send SMS');
+    }
+  };
+
+
   // Load status and balance from backend API route
   useEffect(() => {
     let active = true;
@@ -928,6 +1139,9 @@ export default function Dialer({
         if (active) {
           setBalance(data.balance || '0.00');
           setNumberHealth(data.numberHealth || 'unknown');
+          if (data.number) {
+            setTelnyxNumber(data.number);
+          }
         }
       } catch (err) {
         console.error('[Dialer] Error fetching status:', err);
@@ -975,7 +1189,7 @@ export default function Dialer({
       
       const key = e.key.toLowerCase();
       const activeEl = document.activeElement;
-      const isInputFocused = activeEl && activeEl.tagName === 'INPUT';
+      const isInputFocused = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
 
       if (!isInputFocused) {
         if (/[0-9]/.test(key) || key === '*' || key === '#') {
@@ -1001,6 +1215,12 @@ export default function Dialer({
         } else if (key === 'e') {
           e.preventDefault();
           togglePlaySound(2);
+        } else if (key === 'v') {
+          e.preventDefault();
+          if (callState === 'active' && soundFiles[3] && !vmDropping) {
+            setVmDropping(true);
+            togglePlaySound(3);
+          }
         }
       }
       
@@ -1016,7 +1236,7 @@ export default function Dialer({
       if (callState !== 'idle' || showSettings) return;
       
       const activeEl = document.activeElement;
-      const isInputFocused = activeEl && activeEl.tagName === 'INPUT';
+      const isInputFocused = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
       
       if (!isInputFocused) {
         const pastedText = e.clipboardData?.getData('text') || '';
@@ -1807,6 +2027,38 @@ export default function Dialer({
                   />
                 </div>
               </div>
+
+              {/* Voicemail Drop Configuration */}
+              <div className="space-y-2 pt-3 border-t border-zinc-900">
+                <div className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider mb-1 select-none">Voicemail Drop Audio</div>
+                
+                {soundFiles[3] ? (
+                  <div className="p-3 rounded-xl bg-zinc-900/40 border border-zinc-900 flex items-center justify-between gap-2">
+                    <div className="flex-grow min-w-0">
+                      <p className="text-xs font-semibold text-amber-400 truncate">{soundFiles[3].name}</p>
+                      <span className="text-[9px] text-zinc-500 block mt-0.5">Ready to drop (Hotkey V during calls)</span>
+                    </div>
+                    <button
+                      onClick={() => removeSound(3)}
+                      className="p-1 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-red-400 transition-colors"
+                      title="Remove file"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="flex flex-col items-center justify-center p-4 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 hover:bg-zinc-950/70 hover:border-zinc-700 cursor-pointer transition-all">
+                    <Voicemail size={16} className="text-zinc-500 mb-1" />
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">Upload VM Audio (.mp3)</span>
+                    <input
+                      type="file"
+                      accept="audio/*"
+                      onChange={(e) => handleSoundUpload(3, e)}
+                      className="hidden"
+                    />
+                  </label>
+                )}
+              </div>
             </div>
 
             {/* Back Button */}
@@ -2035,6 +2287,26 @@ export default function Dialer({
                     <Delete size={14} />
                   </button>
                 )}
+                {callState === 'active' && (
+                  <button
+                    onClick={() => {
+                      if (!soundFiles[3] || vmDropping) return;
+                      setVmDropping(true);
+                      togglePlaySound(3);
+                    }}
+                    disabled={!soundFiles[3] || vmDropping}
+                    className={`w-10 h-10 rounded-full border flex items-center justify-center transition-all active:scale-90 ${
+                      vmDropping
+                        ? 'bg-amber-500 text-black animate-pulse border-amber-400'
+                        : soundFiles[3]
+                          ? 'bg-amber-950/30 border-amber-900/50 text-amber-400 hover:bg-amber-900/20'
+                          : 'bg-zinc-950 border-zinc-900 text-zinc-700 cursor-not-allowed'
+                    }`}
+                    title={soundFiles[3] ? 'Drop Voicemail (V)' : 'Upload VM Audio file in Settings first'}
+                  >
+                    <Voicemail size={15} />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -2042,184 +2314,150 @@ export default function Dialer({
         )}
       </div>
 
-      {/* SOUND PAD PANEL (RIGHT) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-6 flex flex-col min-h-[480px]">
-        <div className="flex items-center justify-between mb-4 pb-2 border-b border-zinc-900">
-          <div className="flex items-center gap-2">
-            <Volume2 size={14} className="text-zinc-500" />
-            <h2 className="text-xs font-bold tracking-wider uppercase text-zinc-400 select-none">Sound Pad</h2>
-          </div>
-
-          {/* Microphone Toggle on Soundboard */}
-          <button 
-            onClick={toggleSoundPadMic}
-            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full border text-[9px] font-bold uppercase tracking-wider transition-all duration-200 active:scale-95 select-none ${
-              isMicEnabled 
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' 
-                : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:bg-zinc-850 hover:text-zinc-400'
-            }`}
-            title={isMicEnabled ? "Mute mic channel" : "Unmute mic channel"}
-          >
-            {isMicEnabled ? <Mic size={10} /> : <MicOff size={10} />}
-            <span>{isMicEnabled ? "Mic ON" : "Mic OFF"}</span>
-          </button>
-        </div>
-
-        {/* Master volume slider */}
-        <div className="mb-5 bg-zinc-900/20 border border-zinc-900 p-3.5 rounded-2xl flex flex-col gap-1.5 select-none">
-          <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-zinc-500">
-            <span>Pad Volume</span>
-            <span>{Math.round(soundPadVolume * 100)}%</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {soundPadVolume === 0 ? <VolumeX size={13} className="text-zinc-600" /> : <Volume2 size={13} className="text-zinc-400" />}
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={soundPadVolume}
-              onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500 focus:outline-none"
-            />
-          </div>
-        </div>
-
-        {/* Sound Pad Slots — 3 regular + 1 VM Drop */}
-        <div className="flex-grow space-y-4 max-h-[350px] overflow-y-auto scrollbar-none">
-          {[0, 1, 2].map((index) => (
-            <div 
-              key={index}
-              className="p-3.5 rounded-2xl bg-zinc-900/10 border border-zinc-900/50 hover:border-zinc-800/40 transition-all flex flex-col gap-2 relative overflow-hidden"
-            >
-              {/* Invisible audio node is handled in-memory via AudioBuffer */}
-
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 select-none">Slot {index + 1}</span>
-                  <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-zinc-950 border border-zinc-900 text-zinc-600 select-none">
-                    {index === 0 ? 'Q' : index === 1 ? 'W' : 'E'}
-                  </span>
-                </div>
-                {soundFiles[index] && (
-                  <button 
-                    onClick={() => removeSound(index)}
-                    className="text-zinc-600 hover:text-red-400 transition-colors"
-                    title="Unload file"
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
-
-              {soundFiles[index] ? (
-                /* FILE LOADED STATE */
-                <div className="flex items-center justify-between gap-2.5">
-                  <div className="text-left flex-grow min-w-0">
-                    <p className="text-xs font-semibold text-zinc-300 truncate select-none">{soundFiles[index]?.name}</p>
-                    <span className="text-[9px] text-zinc-600 select-none">
-                      {soundFiles[index]?.size ? `${(soundFiles[index]!.size / (1024 * 1024)).toFixed(2)} MB` : 'Audio Clip'}
-                    </span>
-                  </div>
-                  
-                  <button 
-                    onClick={() => togglePlaySound(index)}
-                    className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
-                      playingStates[index] 
-                        ? 'bg-emerald-500 text-black scale-105 shadow-md shadow-emerald-500/20' 
-                        : 'bg-zinc-900 border border-zinc-850 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-                    }`}
-                    title={playingStates[index] ? 'Pause' : 'Play'}
-                  >
-                    {playingStates[index] ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" className="ml-0.5" />}
-                  </button>
-                </div>
-              ) : (
-                /* EMPTY SLOT - UPLOAD TRIGGERS */
-                <div className="flex items-center justify-center">
-                  <label 
-                    htmlFor={`sound-file-${index}`}
-                    className="w-full border border-dashed border-zinc-900 hover:border-zinc-800 hover:bg-zinc-900/10 transition-all rounded-xl p-3.5 flex flex-col items-center gap-1.5 cursor-pointer text-zinc-500 hover:text-zinc-400 select-none"
-                  >
-                    <Upload size={14} className="animate-pulse" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider">Upload Sound</span>
-                    <input 
-                      id={`sound-file-${index}`}
-                      type="file" 
-                      accept="audio/*" 
-                      onChange={(e) => handleSoundUpload(index, e)}
-                      className="hidden" 
-                    />
-                  </label>
-                </div>
-              )}
+      {/* QUICK SMS PANEL (RIGHT) */}
+      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-6 flex flex-col min-h-[480px] h-full justify-between overflow-hidden">
+        <div className="flex flex-col h-full flex-grow min-h-0">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-1 pb-1 select-none">
+            <div className="flex items-center gap-2">
+              <MessageSquare size={14} className="text-emerald-400" />
+              <h2 className="text-xs font-bold tracking-wider uppercase text-zinc-400">Quick SMS</h2>
             </div>
-          ))}
-
-          {/* VM DROP SLOT */}
-          <div className="p-3.5 rounded-2xl bg-amber-950/10 border border-amber-900/30 hover:border-amber-900/50 transition-all flex flex-col gap-2 relative overflow-hidden">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <Voicemail size={11} className="text-amber-400" />
-                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 select-none">VM Drop</span>
-                <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-amber-950/30 border border-amber-900/30 text-amber-600 select-none">V</span>
-              </div>
-              {soundFiles[3] && (
-                <button
-                  onClick={() => removeSound(3)}
-                  className="text-zinc-600 hover:text-red-400 transition-colors"
-                  title="Unload VM file"
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </div>
-
-            {soundFiles[3] ? (
-              <div className="flex items-center justify-between gap-2.5">
-                <div className="text-left flex-grow min-w-0">
-                  <p className="text-[11px] font-semibold text-amber-300 truncate select-none">{soundFiles[3]?.name}</p>
-                  <span className="text-[9px] text-zinc-600 select-none">Auto-hangs up after playback</span>
-                </div>
-                <button
-                  onClick={() => {
-                    if (callState !== 'active') return;
-                    setVmDropping(true);
-                    togglePlaySound(3);
-                    // Watch for playback end via source.onended — handled in togglePlaySound
-                  }}
-                  disabled={callState !== 'active' || vmDropping}
-                  className={`w-9 h-9 rounded-full flex items-center justify-center transition-all border ${
-                    vmDropping
-                      ? 'bg-amber-500 text-black animate-pulse border-amber-400'
-                      : callState === 'active'
-                        ? 'bg-amber-950/30 border-amber-900/50 text-amber-400 hover:bg-amber-900/40'
-                        : 'bg-zinc-900 border-zinc-850 text-zinc-600 cursor-not-allowed'
-                  }`}
-                  title={callState !== 'active' ? 'Active call required' : 'Drop Voicemail'}
-                >
-                  <Voicemail size={14} />
-                </button>
-              </div>
+            
+            {/* Active Phone Indicator */}
+            {(activeLead?.phone || phoneNumber) ? (
+              <span className="text-[10px] font-mono text-zinc-500 bg-zinc-900 px-2 py-0.5 rounded-full border border-zinc-800">
+                {activeLead?.phone || phoneNumber}
+              </span>
             ) : (
-              <div className="flex items-center justify-center">
-                <label
-                  htmlFor="vm-drop-file"
-                  className="w-full border border-dashed border-amber-900/30 hover:border-amber-900/50 hover:bg-amber-950/10 transition-all rounded-xl p-3.5 flex flex-col items-center gap-1.5 cursor-pointer text-amber-700 hover:text-amber-500 select-none"
-                >
-                  <Upload size={14} className="animate-pulse" />
-                  <span className="text-[10px] font-bold uppercase tracking-wider">Upload VM Audio</span>
-                  <input
-                    id="vm-drop-file"
-                    type="file"
-                    accept="audio/*"
-                    onChange={(e) => handleSoundUpload(3, e)}
-                    className="hidden"
-                  />
-                </label>
-              </div>
+              <span className="text-[9px] font-bold text-zinc-600 bg-zinc-900/30 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                Idle
+              </span>
             )}
           </div>
+
+          {/* Sender SMS Number */}
+          {telnyxNumber && (
+            <div className="text-[9px] font-semibold text-zinc-600 mb-2 pb-1 border-b border-zinc-900/60 select-none flex items-center justify-between">
+              <span>Sending from:</span>
+              <span className="font-mono text-zinc-500">{telnyxNumber}</span>
+            </div>
+          )}
+
+          {/* Target number block check */}
+          {!(activeLead?.phone || phoneNumber) ? (
+            /* NO NUMBER IN QUEUE STATE */
+            <div className="flex-grow flex flex-col items-center justify-center text-center p-6 select-none my-auto">
+              <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-850 flex items-center justify-center mb-3 text-zinc-650">
+                <MessageSquare size={20} />
+              </div>
+              <p className="text-xs font-bold text-zinc-400 uppercase tracking-wide">No Active Number</p>
+              <p className="text-[10px] text-zinc-600 max-w-[15rem] mt-1.5 leading-relaxed">
+                Select a lead from your queue or enter a number in the dialpad to start texting.
+              </p>
+            </div>
+          ) : (
+            /* SMS WORKSPACE STATE */
+            <div className="flex flex-col flex-grow min-h-0 h-full">
+              {/* Message Feed */}
+              <div className="flex-grow overflow-y-auto space-y-3 pr-1 pb-4 scrollbar-thin scrollbar-thumb-zinc-900 scrollbar-track-transparent min-h-[220px] max-h-[300px]">
+                {smsMessages.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center p-4 select-none my-auto">
+                    <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-wider">No message history</p>
+                    <p className="text-[9px] text-zinc-700 mt-1 max-w-[12rem] leading-relaxed">
+                      Type below to send your first message to this contact.
+                    </p>
+                  </div>
+                ) : (
+                  smsMessages.map((msg) => {
+                    const isOutbound = msg.direction === 'outbound';
+                    return (
+                      <div
+                        key={msg.id}
+                        className={`flex flex-col ${isOutbound ? 'items-end' : 'items-start'}`}
+                      >
+                        <div
+                          className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-xs leading-relaxed select-text ${
+                            isOutbound
+                              ? 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-100 rounded-tr-none'
+                              : 'bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-tl-none'
+                          }`}
+                        >
+                          {msg.text}
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-1 px-1.5 text-[8px] font-bold text-zinc-650 select-none uppercase tracking-wider">
+                          <span>
+                            {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          {isOutbound && (
+                            <>
+                              <span>•</span>
+                              <span className={
+                                msg.status === 'delivered' ? 'text-emerald-500' :
+                                msg.status === 'failed' ? 'text-red-500' : 'text-zinc-550'
+                              }>
+                                {msg.status}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={messageEndRef} />
+              </div>
+
+              {/* Input Form & Template Selector */}
+              <form onSubmit={handleSendSms} className="pt-2 border-t border-zinc-900 mt-auto select-none">
+                {/* Template Selector dropdown */}
+                {smsTemplates.length > 0 && (
+                  <div className="mb-2">
+                    <select
+                      value={selectedTemplateId}
+                      onChange={(e) => handleTemplateChange(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-900 rounded-xl px-2.5 py-1.5 text-[10px] font-bold text-zinc-400 focus:outline-none focus:border-zinc-800 transition-colors uppercase tracking-wider cursor-pointer"
+                    >
+                      <option value="">-- Use a template --</option>
+                      {smsTemplates.map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Input text + send button */}
+                <div className="flex gap-2 items-center bg-zinc-950 border border-zinc-900 rounded-2xl p-1.5 focus-within:border-zinc-800 transition-colors">
+                  <textarea
+                    ref={textareaRef}
+                    rows={1}
+                    value={smsInput}
+                    onChange={(e) => setSmsInput(e.target.value)}
+                    placeholder="Type a message..."
+                    className="flex-grow bg-transparent border-0 resize-none px-2 py-1 text-xs text-zinc-200 placeholder-zinc-600 focus:ring-0 focus:outline-none scrollbar-none max-h-[120px]"
+                    style={{ height: 'auto', minHeight: '24px' }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendSms(e as any);
+                      }
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSendingSms || !smsInput.trim()}
+                    className="w-8 h-8 rounded-xl bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 disabled:bg-zinc-900 disabled:text-zinc-700 transition-all flex items-center justify-center flex-shrink-0 cursor-pointer"
+                  >
+                    {isSendingSms ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Send size={13} fill="currentColor" />
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
         </div>
       </div>
 

@@ -8,18 +8,28 @@ const TELNYX_API_KEY = process.env.TELNYX_API_KEY && process.env.TELNYX_API_KEY.
   : (process.env.TELNYX_CALL_API_KEY || process.env.TELNYX_API_KEY);
 const TELNYX_PHONE_NUMBER = process.env.TELNYX_PHONE_NUMBER;
 
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/[^0-9+]/g, '');
+  if (digits.startsWith('+')) return digits;
+  if (digits.length === 10) return '+1' + digits;
+  if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  return '+' + digits;
+}
+
 export async function sendSMS(toPhoneNumber: string, text: string, contactId?: string) {
   try {
     if (!TELNYX_API_KEY || !TELNYX_PHONE_NUMBER) {
       throw new Error('Telnyx credentials are not fully configured in environment variables.');
     }
 
+    const normalizedTo = normalizePhone(toPhoneNumber);
+
     // 1. Verify if the contact is opted out
     let contact = null;
     if (contactId) {
       contact = await db.contact.findUnique({ where: { id: contactId } });
     } else {
-      contact = await db.contact.findUnique({ where: { phoneNumber: toPhoneNumber } });
+      contact = await db.contact.findUnique({ where: { phoneNumber: normalizedTo } });
     }
 
     if (contact && contact.tags.includes('Opted Out')) {
@@ -42,7 +52,7 @@ export async function sendSMS(toPhoneNumber: string, text: string, contactId?: s
       },
       body: JSON.stringify({
         from: TELNYX_PHONE_NUMBER,
-        to: toPhoneNumber,
+        to: normalizedTo,
         text: finalPayloadText,
       }),
     });
@@ -59,8 +69,8 @@ export async function sendSMS(toPhoneNumber: string, text: string, contactId?: s
     if (!contact) {
       contact = await db.contact.create({
         data: {
-          name: toPhoneNumber,
-          phoneNumber: toPhoneNumber,
+          name: normalizedTo,
+          phoneNumber: normalizedTo,
           tags: ['Lead'],
           notes: '',
         },
@@ -77,7 +87,7 @@ export async function sendSMS(toPhoneNumber: string, text: string, contactId?: s
         direction: 'outbound',
         text: finalPayloadText,
         sender: TELNYX_PHONE_NUMBER,
-        recipient: toPhoneNumber,
+        recipient: normalizedTo,
         status: 'sent',
         telnyxMessageId: telnyxMsgId,
         contactId: contact.id,
@@ -169,3 +179,33 @@ export async function getThreads() {
     return { success: false, error: error.message };
   }
 }
+
+export async function getMessagesByPhone(phoneNumber: string) {
+  try {
+    const digits = phoneNumber.replace(/[^0-9+]/g, '');
+    let formatted = digits;
+    if (!formatted.startsWith('+')) {
+      if (formatted.length === 10) formatted = '+1' + formatted;
+      else formatted = '+' + formatted;
+    }
+
+    let contact = await db.contact.findUnique({
+      where: { phoneNumber: formatted }
+    });
+
+    if (!contact) {
+      return { success: true, messages: [], contact: null };
+    }
+
+    const messages = await db.message.findMany({
+      where: { contactId: contact.id },
+      orderBy: { timestamp: 'asc' },
+    });
+
+    return { success: true, messages, contact };
+  } catch (error: any) {
+    console.error('[getMessagesByPhone Error]:', error);
+    return { success: false, error: error.message };
+  }
+}
+

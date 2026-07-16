@@ -25,6 +25,26 @@ Originally, opening the **Leads** (Lead Queue) or **Pipeline** (Kanban Pipeline)
 
 ---
 
+## ⚡ Keepalive & Heartbeat Fix (Stubborn Connection)
+
+### The Issue
+The WebRTC signaling WebSocket connection to the Telnyx gateway was disconnecting after exactly 30 seconds of inactivity (idleness). This is caused by intermediate proxy servers, local NAT firewalls, or load balancers dropping idle TCP connections. When the socket dropped, the line status fluctuated to "Disconnected" or "Securing Line...", rendering incoming and outbound calling unstable and prone to dropouts.
+
+### The Fix
+1. **SDK-Level Keep-Alive Configuration**:
+   - Configured the `TelnyxRTC` client with `autoReconnect: true` to instantly recover from transient state drops.
+   - Enabled `keepConnectionAliveOnSocketClose: true` so any active call media stream stays alive while the signaling layer reconnects.
+   - Set `maxReconnectAttempts: 20` to guarantee robust, persistent retry behaviors.
+2. **SDK Health Monitoring**:
+   - Proactively triggered the SDK's built-in `startSignalingHealthMonitor()` once the `telnyx.ready` event fires to actively monitor signaling health.
+3. **Manual Heartbeat Ping Loop**:
+   - Implemented a custom 15-second heartbeat interval upon a successful connection.
+   - Sends a JSON-RPC ping payload (`method: "telnyx_rtc.ping"`) directly to the Telnyx gateway via raw socket transmission channels.
+   - Cleans up and clears the interval timer properly on socket close, socket error, client recreation, and component unmount.
+
+
+---
+
 ## Verification
 
 ```
@@ -41,6 +61,27 @@ Originally, opening the **Leads** (Lead Queue) or **Pipeline** (Kanban Pipeline)
 ```
 
 **Zero type errors. Zero warnings. Clean production build.**
+
+---
+
+## 💬 Quick SMS Workspace & Voicemail Drop Integration
+
+### The Change
+Replaced the static Sound Pad panel (which occupied the right column of the Dialer layout) with a fully functional, real-time **Quick SMS Workspace** targeting the dialed or active lead's phone number. Additionally, relocated and optimized the **Voicemail Drop (VM Drop)** upload and call controls.
+
+### Implementation Details
+1. **Quick SMS Workspace Panel (Right Column)**:
+   - **Conversation Thread**: Renders message bubbles exchanged with the active/dialed phone number (outbound messages styled in emerald aligned right; inbound messages in zinc aligned left).
+   - **Real-Time Synchronized**: Subscribes to the Pusher client `sms-channel` to bind `new-message` and `message-status-update` events, updating the message log and message status badges (*Sent*, *Delivered*, *Failed*, *Received*) instantly.
+   - **Automatic Thread Scroller**: A ref-based observer auto-scrolls the feed to the bottom when new messages arrive.
+   - **Lead Template Injection**: Integrates an outreach template selector dropdown. Selecting a template automatically populates the text field and substitutes tags like `{firstName}` and `{companyName}` with the active lead's details.
+   - **Fallback/Idle State**: Displays a clean, dark-themed placeholder instruction card when no active phone number has been selected or dialed.
+
+2. **Voicemail Drop (VM Drop) Relocation**:
+   - **Settings Panel Setup**: Since the Sound Pad cards are removed, a dedicated **Voicemail Drop Audio** dropzone has been added to the main Settings modal (gear icon). Reps can upload an `.mp3`/`.wav` file, which is decoded into an `AudioBuffer` in memory.
+   - **Call Control Action Bar Button**: During an active call, if a voicemail drop file has been uploaded, a dedicated amber-themed **Voicemail Drop** button replaces the backspace button in the call control row.
+   - **Single-Click & Hotkey Trigger**: Clicking the VM Drop button (or pressing the hotkey `V` on your keyboard) triggers the voicemail playback into the active WebRTC stream and schedules an automated call hangup (`handleHangup`) 500ms after the audio finishes.
+
 
 ---
 
