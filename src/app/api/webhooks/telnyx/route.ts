@@ -168,10 +168,13 @@ export async function POST(request: Request) {
     else if (
       eventType === 'message.sent' || 
       eventType === 'message.delivered' || 
-      eventType === 'message.failed'
+      eventType === 'message.failed' ||
+      eventType === 'message.undelivered' ||
+      eventType === 'message.delivery_failed'
     ) {
       const msgId = payload.id;
-      const status = eventType.split('.')[1]; // "sent", "delivered", "failed"
+      let rawStatus = eventType.split('.').pop() || '';
+      let status = (rawStatus === 'undelivered' || rawStatus === 'delivery_failed') ? 'failed' : rawStatus;
 
       // Find existing message by telnyxMessageId
       const existingMsg = await db.message.findFirst({

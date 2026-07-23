@@ -92,6 +92,7 @@ export async function GET() {
       creditLimit: balanceData?.credit_limit || '0.00',
       availableCredit: balanceData?.available_credit || '0.00',
       number: telnyxNumber || null,
+      smsNumber: process.env.TELNYX_PHONE_NUMBER || null,
       numberStatus: numberDetails?.status || 'unknown',
       numberHealth: numberHealth,
       connectionId: numberDetails?.connection_id || null,

@@ -255,6 +255,7 @@ export default function Dialer({
   const [isMuted, setIsMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [telnyxNumber, setTelnyxNumber] = useState<string>('');
+  const [telnyxSmsNumber, setTelnyxSmsNumber] = useState<string>('');
 
   // Audio Device Selection
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
@@ -335,6 +336,9 @@ export default function Dialer({
 
   // Helper to format phone number progressively for display
   const formatPhoneNumber = (num: string): string => {
+    if (/[a-zA-Z]/.test(num)) {
+      return num;
+    }
     const cleaned = num.replace(/[^0-9*#+]/g, '');
     
     // Format US/Canada and international numbers (+1 or 1)
@@ -721,58 +725,19 @@ export default function Dialer({
             }
           }
 
-          // Setup manual heartbeat ping to prevent proxy/NAT idle timeouts
-          if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-          pingIntervalRef.current = setInterval(() => {
-            if (rtcClient && rtcClient.connected) {
-              try {
-                const voiceSdkId = sessionStorage.getItem('telnyx-voice-sdk-id') || '';
-                const pingMessage = {
-                  jsonrpc: '2.0',
-                  id: 'hb_' + Math.random().toString(36).substring(2, 11),
-                  method: 'telnyx_rtc.ping',
-                  voice_sdk_id: voiceSdkId,
-                  params: {}
-                };
-                
-                // Use executeRaw if available, otherwise direct WebSocket send
-                if (typeof rtcClient.executeRaw === 'function') {
-                  rtcClient.executeRaw(JSON.stringify(pingMessage));
-                } else {
-                  const conn = rtcClient.connection as any;
-                  if (conn && typeof conn.sendRawText === 'function') {
-                    conn.sendRawText(JSON.stringify(pingMessage));
-                  } else if (conn && conn._wsClient && conn._wsClient.readyState === 1) {
-                    conn._wsClient.send(JSON.stringify(pingMessage));
-                  }
-                }
-                console.log('[Dialer] Sent signaling heartbeat ping.');
-              } catch (err) {
-                console.warn('[Dialer] Heartbeat ping failed:', err);
-              }
-            }
-          }, 15000); // 15 seconds is well under typical 30-second proxy/NAT limits
         });
 
         rtcClient.on('telnyx.socket.close', () => {
-          if (pingIntervalRef.current) {
-            clearInterval(pingIntervalRef.current);
-            pingIntervalRef.current = null;
-          }
           if (!active) return;
           console.warn('[Dialer] WebRTC socket closed.');
-          setSipState('disconnected');
+          setSipState('connecting');
           scheduleReconnect();
         });
 
         rtcClient.on('telnyx.socket.error', (err: any) => {
-          if (pingIntervalRef.current) {
-            clearInterval(pingIntervalRef.current);
-            pingIntervalRef.current = null;
-          }
           if (!active) return;
           console.error('[Dialer] WebRTC socket error:', err);
-          setSipState('error');
+          setSipState('connecting');
           scheduleReconnect();
         });
 
@@ -822,7 +787,14 @@ export default function Dialer({
               case 'ringing':
                 setCallState('ringing');
                 audioService.startRingtone();
-                setPhoneNumber(call.callerNumber || 'Incoming Call');
+                const incomingNumber = notification.displayNumber || 
+                                       call.options?.remoteCallerNumber || 
+                                       call.options?.callerIdNumber ||
+                                       call.options?.callerNumber ||
+                                       call.callerNumber || 
+                                       notification.displayName ||
+                                       'Incoming Call';
+                setPhoneNumber(incomingNumber);
                 break;
               case 'active':
                 setCallState('active');
@@ -1141,6 +1113,9 @@ export default function Dialer({
           setNumberHealth(data.numberHealth || 'unknown');
           if (data.number) {
             setTelnyxNumber(data.number);
+          }
+          if (data.smsNumber) {
+            setTelnyxSmsNumber(data.smsNumber);
           }
         }
       } catch (err) {
@@ -2337,10 +2312,10 @@ export default function Dialer({
           </div>
 
           {/* Sender SMS Number */}
-          {telnyxNumber && (
+          {telnyxSmsNumber && (
             <div className="text-[9px] font-semibold text-zinc-600 mb-2 pb-1 border-b border-zinc-900/60 select-none flex items-center justify-between">
               <span>Sending from:</span>
-              <span className="font-mono text-zinc-500">{telnyxNumber}</span>
+              <span className="font-mono text-zinc-500">{telnyxSmsNumber}</span>
             </div>
           )}
 
