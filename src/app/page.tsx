@@ -429,7 +429,7 @@ export default function Home() {
       )}
 
       <footer className="text-[10px] tracking-wider text-zinc-650 font-semibold uppercase z-10 select-none pb-4">
-        Powered by Telnyx Voice API
+        Powered by Inex Labs Voice Engine
       </footer>
     </div>
   );

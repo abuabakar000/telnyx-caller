@@ -1255,15 +1255,24 @@ export default function Dialer({
 
   const handleCall = async () => {
     if (!client || sipState !== 'connected') {
-      setErrorMessage('Dialer is not connected to Telnyx network.');
+      setErrorMessage('Dialer is not connected to network.');
       return;
     }
     if (!phoneNumber) return;
 
     try {
       setErrorMessage(null);
-      stopSettingsMicTest(); // Stop tester when making a call
-      const cleanNumber = phoneNumber.replace(/[^0-9*#+]/g, '');
+      let cleanNumber = phoneNumber.replace(/[^0-9*#+]/g, '');
+      if (!cleanNumber.startsWith('+') && !cleanNumber.includes('*') && !cleanNumber.includes('#')) {
+        const onlyDigits = cleanNumber.replace(/[^0-9]/g, '');
+        if (onlyDigits.length === 10) {
+          cleanNumber = '+1' + onlyDigits;
+        } else if (onlyDigits.length === 11 && onlyDigits.startsWith('1')) {
+          cleanNumber = '+' + onlyDigits;
+        } else if (onlyDigits.length > 0) {
+          cleanNumber = '+' + onlyDigits;
+        }
+      }
       console.log(`[Dialer] Outgoing call to: ${cleanNumber}`);
 
       // Mix local microphone and sound pad elements

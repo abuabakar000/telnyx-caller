@@ -38,7 +38,7 @@ export default function Navbar() {
             <PhoneCall size={16} />
           </div>
           <span className="text-xs font-bold tracking-widest text-zinc-200 uppercase">
-            Telnyx Suite
+            Inex Labs Suite
           </span>
         </div>
 
