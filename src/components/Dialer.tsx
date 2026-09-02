@@ -778,24 +778,63 @@ export default function Dialer({
             const call = notification.call;
             setCurrentCall(call);
 
+            const isOutbound = call.direction === 'outbound';
+
+            // Helper to attach remote audio stream whenever available (early media, ringing, or active)
+            const attachRemoteStream = () => {
+              if (audioRef.current && call.remoteStream) {
+                if (audioRef.current.srcObject !== call.remoteStream) {
+                  audioRef.current.srcObject = call.remoteStream;
+                  
+                  const savedSpk = localStorage.getItem('telnyx_selected_speaker');
+                  if (savedSpk && typeof (audioRef.current as any).setSinkId === 'function') {
+                    (audioRef.current as any).setSinkId(savedSpk).catch((e: any) => {
+                      console.warn('[Speaker] Failed to set sink ID:', e);
+                    });
+                  }
+                  
+                  audioRef.current.play().catch(err => {
+                    console.warn('[Audio] Remote play failed:', err);
+                  });
+                }
+              }
+            };
+
             switch (call.state) {
               case 'trying':
               case 'requesting':
                 setCallState('dialing');
-                audioService.startRingback();
+                if (isOutbound) {
+                  audioService.startRingback();
+                }
                 break;
+
+              case 'early':
+                // Carrier early media (SIP 183 - carrier ringback, busy tones, operator messages)
+                setCallState(isOutbound ? 'dialing' : 'ringing');
+                attachRemoteStream();
+                if (call.remoteStream && call.remoteStream.getAudioTracks().length > 0) {
+                  audioService.stopRingback();
+                }
+                break;
+
               case 'ringing':
                 setCallState('ringing');
-                audioService.startRingtone();
-                const incomingNumber = notification.displayNumber || 
-                                       call.options?.remoteCallerNumber || 
-                                       call.options?.callerIdNumber ||
-                                       call.options?.callerNumber ||
-                                       call.callerNumber || 
-                                       notification.displayName ||
-                                       'Incoming Call';
-                setPhoneNumber(incomingNumber);
+                if (isOutbound) {
+                  attachRemoteStream();
+                } else {
+                  audioService.startRingtone();
+                  const incomingNumber = notification.displayNumber || 
+                                         call.options?.remoteCallerNumber || 
+                                         call.options?.callerIdNumber ||
+                                         call.options?.callerNumber ||
+                                         call.callerNumber || 
+                                         notification.displayName ||
+                                         'Incoming Call';
+                  setPhoneNumber(incomingNumber);
+                }
                 break;
+
               case 'active':
                 setCallState('active');
                 audioService.stopRingback();
@@ -813,21 +852,8 @@ export default function Dialer({
                   }
                 }, 1000);
 
-                // Apply selected speaker
-                if (audioRef.current && call.remoteStream) {
-                  audioRef.current.srcObject = call.remoteStream;
-                  
-                  const savedSpk = localStorage.getItem('telnyx_selected_speaker');
-                  if (savedSpk && typeof (audioRef.current as any).setSinkId === 'function') {
-                    (audioRef.current as any).setSinkId(savedSpk).catch((e: any) => {
-                      console.warn('[Speaker] Failed to set sink ID:', e);
-                    });
-                  }
-                  
-                  audioRef.current.play().catch(err => {
-                    console.warn('[Audio] Autoplay blocked or failed:', err);
-                  });
-                }
+                // Apply selected speaker & stream
+                attachRemoteStream();
 
                 // Start Volume Spinners analysis
                 if (call.localStream) {
@@ -1275,6 +1301,9 @@ export default function Dialer({
       }
       console.log(`[Dialer] Outgoing call to: ${cleanNumber}`);
 
+      setCallState('dialing');
+      audioService.startRingback();
+
       // Mix local microphone and sound pad elements
       const mixedStream = await getMixedStream();
 
@@ -1290,6 +1319,8 @@ export default function Dialer({
       setCurrentCall(call);
     } catch (err: any) {
       console.error('[Dialer] Failed to place call:', err);
+      setCallState('idle');
+      audioService.stopRingback();
       setErrorMessage(err.message || 'Call failed.');
     }
   };
@@ -2223,22 +2254,32 @@ export default function Dialer({
                 )}
 
                 {callState === 'ringing' && (
-                  <div className="flex gap-3 items-center">
+                  currentCall?.direction === 'inbound' ? (
+                    <div className="flex gap-3 items-center">
+                      <button
+                        onClick={handleReject}
+                        className="w-12 h-12 rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-md"
+                        title="Decline"
+                      >
+                        <PhoneOff size={18} />
+                      </button>
+                      <button
+                        onClick={handleAnswer}
+                        className="w-12 h-12 rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-md animate-bounce"
+                        title="Accept"
+                      >
+                        <Phone size={18} fill="currentColor" />
+                      </button>
+                    </div>
+                  ) : (
                     <button
-                      onClick={handleReject}
-                      className="w-12 h-12 rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-md"
-                      title="Decline"
+                      onClick={handleHangup}
+                      className="w-14 h-14 rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_15px_rgba(239,68,68,0.25)]"
+                      title="Hang Up"
                     >
-                      <PhoneOff size={18} />
+                      <PhoneOff size={20} />
                     </button>
-                    <button
-                      onClick={handleAnswer}
-                      className="w-12 h-12 rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-md animate-bounce"
-                      title="Accept"
-                    >
-                      <Phone size={18} fill="currentColor" />
-                    </button>
-                  </div>
+                  )
                 )}
 
                 {(callState === 'dialing' || callState === 'active') && (
