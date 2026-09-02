@@ -25,7 +25,10 @@ import {
   Building2,
   Send,
   MessageSquare,
-  Loader2
+  Loader2,
+  Shield,
+  ShieldCheck,
+  ShieldAlert
 } from 'lucide-react';
 import { audioService } from '@/utils/audio';
 import { sendSMS, getMessagesByPhone } from '@/app/actions/sms';
@@ -301,6 +304,25 @@ export default function Dialer({
   const [numberHealth, setNumberHealth] = useState<string>('unknown');
   const [fetchingStatus, setFetchingStatus] = useState<boolean>(false);
 
+  // 4-Ring Rule / Free Dials Guard State
+  const [autoDropEnabled, setAutoDropEnabled] = useState(true);
+  const [autoDropMaxRings, setAutoDropMaxRings] = useState(4);
+  const [ringingSeconds, setRingingSeconds] = useState(0);
+  const [freeDialNotice, setFreeDialNotice] = useState<string | null>(null);
+
+  const ringStartTimeRef = useRef<number | null>(null);
+  const ringIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const autoDropEnabledRef = useRef(true);
+  const autoDropMaxRingsRef = useRef(4);
+
+  useEffect(() => {
+    autoDropEnabledRef.current = autoDropEnabled;
+  }, [autoDropEnabled]);
+
+  useEffect(() => {
+    autoDropMaxRingsRef.current = autoDropMaxRings;
+  }, [autoDropMaxRings]);
+
   // Refs to avoid stale closures in event listeners & timeouts
   const phoneNumberRef = useRef('');
   const currentCallRef = useRef<any>(null);
@@ -333,6 +355,44 @@ export default function Dialer({
   const activeSourcesRef = useRef<(AudioBufferSourceNode | null)[]>([null, null, null, null]);
   const slotGainsRef = useRef<any[]>([null, null, null, null]);
   const micGainNodeRef = useRef<GainNode | null>(null);
+  const handleHangupRef = useRef<() => void>(() => {});
+
+  // Ring timer helpers for 4-Ring Rule / Free Dials Guard
+  const stopRingTimer = useCallback(() => {
+    if (ringIntervalRef.current) {
+      clearInterval(ringIntervalRef.current);
+      ringIntervalRef.current = null;
+    }
+    ringStartTimeRef.current = null;
+    setRingingSeconds(0);
+  }, []);
+
+  const startRingTimer = useCallback(() => {
+    if (ringIntervalRef.current) clearInterval(ringIntervalRef.current);
+    ringStartTimeRef.current = Date.now();
+    setRingingSeconds(0);
+
+    ringIntervalRef.current = setInterval(() => {
+      if (!ringStartTimeRef.current) return;
+      const elapsed = (Date.now() - ringStartTimeRef.current) / 1000;
+      setRingingSeconds(elapsed);
+
+      // Auto-hangup when reaching the ring limit (each ring is ~4.5s)
+      const maxSeconds = autoDropMaxRingsRef.current * 4.5;
+      if (autoDropEnabledRef.current && elapsed >= maxSeconds) {
+        console.log(`[4-Ring Auto-Guard] Reached ${autoDropMaxRingsRef.current} rings (${elapsed.toFixed(1)}s). Auto-hanging up before voicemail connects ($0.00 Free Dial)...`);
+        if (ringIntervalRef.current) {
+          clearInterval(ringIntervalRef.current);
+          ringIntervalRef.current = null;
+        }
+        ringStartTimeRef.current = null;
+        setFreeDialNotice(`🛡️ 4-Ring Rule: Auto-dropped at ${autoDropMaxRingsRef.current} rings ($0.00 Free Dial)`);
+        if (handleHangupRef.current) {
+          handleHangupRef.current();
+        }
+      }
+    }, 100);
+  }, []);
 
   // Helper to format phone number progressively for display
   const formatPhoneNumber = (num: string): string => {
@@ -806,6 +866,7 @@ export default function Dialer({
                 setCallState('dialing');
                 if (isOutbound) {
                   audioService.startRingback();
+                  if (!ringStartTimeRef.current) startRingTimer();
                 }
                 break;
 
@@ -813,6 +874,7 @@ export default function Dialer({
                 // Carrier early media (SIP 183 - carrier ringback, busy tones, operator messages)
                 setCallState(isOutbound ? 'dialing' : 'ringing');
                 attachRemoteStream();
+                if (isOutbound && !ringStartTimeRef.current) startRingTimer();
                 if (call.remoteStream && call.remoteStream.getAudioTracks().length > 0) {
                   audioService.stopRingback();
                 }
@@ -822,6 +884,7 @@ export default function Dialer({
                 setCallState('ringing');
                 if (isOutbound) {
                   attachRemoteStream();
+                  if (!ringStartTimeRef.current) startRingTimer();
                 } else {
                   audioService.startRingtone();
                   const incomingNumber = notification.displayNumber || 
@@ -837,6 +900,7 @@ export default function Dialer({
 
               case 'active':
                 setCallState('active');
+                stopRingTimer();
                 audioService.stopRingback();
                 audioService.stopRingtone();
                 audioService.playCallSuccess();
@@ -867,6 +931,7 @@ export default function Dialer({
               case 'done':
                 setCallState('done');
                 console.log('[Dialer] Call ended. Cause:', call.cause, 'Cause Code:', call.causeCode, 'Direction:', call.direction);
+                stopRingTimer();
                 audioService.stopRingback();
                 audioService.stopRingtone();
                 audioService.playCallEnd();
@@ -954,6 +1019,7 @@ export default function Dialer({
         pingIntervalRef.current = null;
       }
       audioService.stopRingback();
+      stopRingTimer();
       stopMicCapture();
       if (inputVolumeAnalyserRef.current) inputVolumeAnalyserRef.current.stop();
       if (outputVolumeAnalyserRef.current) outputVolumeAnalyserRef.current.stop();
@@ -991,6 +1057,19 @@ export default function Dialer({
       setEnableAEC(localStorage.getItem('telnyx_aec') !== 'false');
       setEnableANS(localStorage.getItem('telnyx_ans') !== 'false');
       setEnableAGC(localStorage.getItem('telnyx_agc') !== 'false');
+
+      // Load 4-Ring Rule Free Dial Guard settings
+      const savedAutoDrop = localStorage.getItem('telnyx_auto_4_ring');
+      if (savedAutoDrop !== null) {
+        setAutoDropEnabled(savedAutoDrop !== 'false');
+      }
+      const savedLimit = localStorage.getItem('telnyx_ring_limit');
+      if (savedLimit) {
+        const parsedLimit = parseInt(savedLimit, 10);
+        if ([3, 4, 5].includes(parsedLimit)) {
+          setAutoDropMaxRings(parsedLimit);
+        }
+      }
     }
   }, []);
 
@@ -1186,8 +1265,33 @@ export default function Dialer({
   // Physical keyboard support for numeric typing and soundboard hotkeys (when settings is closed)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Global Escape Hotkey — drop call instantly at any time to guarantee $0.00 Free Dial
+      if (e.key === 'Escape') {
+        if (callState !== 'idle') {
+          e.preventDefault();
+          console.log('[Dialer] ESC key pressed — Instant Hangup requested (Free Dial Guard)');
+          if (callState === 'dialing' || callState === 'ringing') {
+            setFreeDialNotice('🛡️ Dropped via [ESC] before voicemail ($0.00 Free Dial)');
+          }
+          handleHangup();
+          return;
+        }
+      }
+
       if (callState === 'ringing' || showSettings) return;
       
+      // Global Enter Key — dial when Enter is pressed (unless typing in SMS textarea)
+      if (e.key === 'Enter') {
+        const activeEl = document.activeElement;
+        const isTextarea = activeEl && activeEl.tagName === 'TEXTAREA';
+        if (!isTextarea && callState === 'idle' && phoneNumber.trim()) {
+          e.preventDefault();
+          console.log('[Dialer] Enter key pressed — Placing call to:', phoneNumber);
+          handleCall();
+          return;
+        }
+      }
+
       const key = e.key.toLowerCase();
       const activeEl = document.activeElement;
       const isInputFocused = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
@@ -1199,11 +1303,6 @@ export default function Dialer({
         } else if (e.key === 'Backspace') {
           e.preventDefault();
           handleBackspace();
-        } else if (e.key === 'Enter') {
-          e.preventDefault();
-          if (callState === 'idle') {
-            handleCall();
-          }
         }
 
         // Sound Pad Hotkeys Q, W, E
@@ -1218,17 +1317,14 @@ export default function Dialer({
           togglePlaySound(2);
         } else if (key === 'v') {
           e.preventDefault();
-          if (callState === 'active' && soundFiles[3] && !vmDropping) {
-            setVmDropping(true);
-            togglePlaySound(3);
+          if (callState === 'active' && !vmDropping) {
+            if (soundFiles[3]) {
+              setVmDropping(true);
+              togglePlaySound(3);
+            } else {
+              setErrorMessage('⚠️ No Voicemail Audio uploaded! Open Settings (⚙️) to upload your VM .mp3 message.');
+            }
           }
-        }
-      }
-      
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        if (callState !== 'idle') {
-          handleHangup();
         }
       }
     };
@@ -1303,6 +1399,7 @@ export default function Dialer({
 
       setCallState('dialing');
       audioService.startRingback();
+      startRingTimer();
 
       // Mix local microphone and sound pad elements
       const mixedStream = await getMixedStream();
@@ -1319,6 +1416,7 @@ export default function Dialer({
       setCurrentCall(call);
     } catch (err: any) {
       console.error('[Dialer] Failed to place call:', err);
+      stopRingTimer();
       setCallState('idle');
       audioService.stopRingback();
       setErrorMessage(err.message || 'Call failed.');
@@ -1327,6 +1425,7 @@ export default function Dialer({
 
   const handleHangup = () => {
     console.log('[Dialer] Hangup requested. Call state:', callState, 'Current call:', !!currentCall);
+    stopRingTimer();
     try {
       if (currentCall) {
         currentCall.hangup();
@@ -1398,6 +1497,8 @@ export default function Dialer({
       }
     }, 4000);
   };
+
+  handleHangupRef.current = handleHangup;
 
   const handleAnswer = async () => {
     if (currentCall && callState === 'ringing') {
@@ -1665,17 +1766,21 @@ export default function Dialer({
             return updated;
           });
         }
-        // VM Drop slot (index 3): auto-hangup after playback ends
+        // VM Drop slot (index 3): restore mic and auto-hangup after playback ends
         if (index === 3) {
           console.log('[VM Drop] Playback ended — auto-hanging up call.');
+          if (micGainNodeRef.current) {
+            micGainNodeRef.current.gain.value = isMicEnabled ? 1.0 : 0.0;
+          }
           setVmDropping(false);
-          setTimeout(() => {
-            if (currentCallRef.current) {
-              handleHangup();
-            }
-          }, 500);
+          handleHangup();
         }
       };
+
+      // If dropping voicemail, temporarily mute local mic so the message is crystal clear
+      if (index === 3 && micGainNodeRef.current) {
+        micGainNodeRef.current.gain.value = 0.0;
+      }
 
       source.start(0);
       console.log(`[Sound Pad Debug] Slot ${index + 1} playback started successfully.`);
@@ -1847,6 +1952,24 @@ export default function Dialer({
 
           {/* Header Icons Container */}
           <div className="flex items-center gap-2">
+            {/* 4-Ring Guard Quick Toggle */}
+            <button
+              onClick={() => {
+                const nextVal = !autoDropEnabled;
+                setAutoDropEnabled(nextVal);
+                localStorage.setItem('telnyx_auto_4_ring', String(nextVal));
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-bold uppercase tracking-wider transition-all duration-200 select-none ${
+                autoDropEnabled
+                  ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]'
+                  : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
+              }`}
+              title={autoDropEnabled ? `4-Ring Free Guard: Active (${autoDropMaxRings} rings / ${autoDropMaxRings * 4.5}s max)` : '4-Ring Free Guard: Disabled'}
+            >
+              <Shield size={11} className={autoDropEnabled ? 'text-emerald-400' : 'text-zinc-500'} />
+              <span>4-Ring Guard {autoDropEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+
             {/* Call Script Toggle */}
             {onScriptToggle && (
               <button
@@ -2074,6 +2197,64 @@ export default function Dialer({
                   </label>
                 )}
               </div>
+
+              {/* 4-Ring Rule ($0.00 Free Dials) Configuration */}
+              <div className="space-y-2.5 pt-3 border-t border-zinc-900 select-none">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Shield size={13} className="text-emerald-400" />
+                    <span className="text-[10px] uppercase font-bold text-zinc-300 tracking-wider">4-Ring Rule ($0.00 Free Dials)</span>
+                  </div>
+                  <span className="text-[9px] font-mono font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-800/50 px-1.5 py-0.5 rounded-md">
+                    Zero-Cost Guard
+                  </span>
+                </div>
+                
+                <p className="text-[10px] text-zinc-500 leading-relaxed">
+                  Telnyx charges $0.00 while ringing. Automatically hangs up before voicemail picks up to make 100% free unanswered dials.
+                </p>
+
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-zinc-900/20 border border-zinc-900/60">
+                  <span className="text-xs font-semibold text-zinc-300">Auto-Hangup on Ring Limit</span>
+                  <input
+                    type="checkbox"
+                    checked={autoDropEnabled}
+                    onChange={(e) => {
+                      setAutoDropEnabled(e.target.checked);
+                      localStorage.setItem('telnyx_auto_4_ring', String(e.target.checked));
+                    }}
+                    className="w-4 h-4 rounded border-zinc-900 text-emerald-500 focus:ring-0 bg-zinc-950 accent-emerald-500 cursor-pointer"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Ring Limit Duration</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { rings: 3, secs: '13.5s', label: '3 Rings' },
+                      { rings: 4, secs: '18.0s', label: '4 Rings (Rec.)' },
+                      { rings: 5, secs: '22.5s', label: '5 Rings' },
+                    ].map(item => (
+                      <button
+                        key={item.rings}
+                        type="button"
+                        onClick={() => {
+                          setAutoDropMaxRings(item.rings);
+                          localStorage.setItem('telnyx_ring_limit', String(item.rings));
+                        }}
+                        className={`px-2 py-1.5 rounded-xl border text-[10px] font-bold transition-all flex flex-col items-center ${
+                          autoDropMaxRings === item.rings
+                            ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
+                            : 'bg-zinc-950 border-zinc-900 text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        <span>{item.label}</span>
+                        <span className="text-[8px] font-mono text-zinc-500 mt-0.5">{item.secs}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Back Button */}
@@ -2150,6 +2331,65 @@ export default function Dialer({
                 </div>
               )}
 
+              {/* 4-Ring Rule Live Cadence & Progress Bar (Outbound Dialing / Ringing) */}
+              {(callState === 'dialing' || callState === 'ringing') && currentCall?.direction !== 'inbound' && (
+                <div className="w-full max-w-[280px] flex flex-col items-center gap-2 my-2.5 px-3 py-2.5 bg-zinc-900/40 border border-zinc-850 rounded-2xl">
+                  <div className="flex items-center justify-between w-full text-[10px] font-mono select-none">
+                    <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                      <Shield size={12} className="text-emerald-400 animate-pulse shrink-0" />
+                      <span>{autoDropEnabled ? '4-Ring Auto-Guard' : 'Ring Tracker'}:</span>
+                      <span className="text-zinc-200">
+                        Ring {Math.min(autoDropMaxRings, Math.max(1, Math.floor(ringingSeconds / 4.5) + 1))} of {autoDropMaxRings}
+                      </span>
+                    </div>
+                    <span className="text-zinc-400 font-bold font-mono">{ringingSeconds.toFixed(1)}s</span>
+                  </div>
+
+                  {/* Visual Ring Pips */}
+                  <div className="grid grid-cols-4 gap-1.5 w-full">
+                    {Array.from({ length: autoDropMaxRings }).map((_, idx) => {
+                      const ringNum = idx + 1;
+                      const currentRing = Math.floor(ringingSeconds / 4.5) + 1;
+                      const isPast = currentRing > ringNum;
+                      const isCurrent = currentRing === ringNum;
+                      const isLastRing = ringNum === autoDropMaxRings;
+                      
+                      return (
+                        <div key={idx} className="flex flex-col items-center gap-1">
+                          <div className={`h-1.5 w-full rounded-full transition-all duration-200 ${
+                            isPast 
+                              ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]' 
+                              : isCurrent 
+                                ? isLastRing 
+                                  ? 'bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.6)]' 
+                                  : 'bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(16,185,129,0.4)]'
+                                : 'bg-zinc-800'
+                          }`} />
+                          <span className={`text-[8px] font-mono uppercase ${
+                            isPast || isCurrent 
+                              ? (isLastRing ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold') 
+                              : 'text-zinc-600'
+                          }`}>
+                            R{ringNum}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Free Dial Notice & Escape Hint */}
+                  <div className="flex items-center justify-between w-full pt-1 border-t border-zinc-850/80 text-[9px] select-none">
+                    <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-ping" />
+                      $0.00 Free Dial
+                    </span>
+                    <span className="text-zinc-400 flex items-center gap-1">
+                      Press <kbd className="px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-200 font-mono font-bold text-[8px]">ESC</kbd> to Drop Free
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Interactive display field */}
               <div className="relative w-full flex items-center justify-center px-2">
                 <input
@@ -2157,19 +2397,55 @@ export default function Dialer({
                   value={formatPhoneNumber(phoneNumber)}
                   onChange={handleInputChange}
                   onPaste={handlePaste}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (callState === 'idle' && phoneNumber.trim() && sipState === 'connected') {
+                        handleCall();
+                      }
+                    }
+                  }}
                   placeholder="Enter number"
                   disabled={callState !== 'idle'}
                   className="w-full bg-transparent border-none outline-none text-center text-2xl font-bold font-mono text-zinc-100 placeholder-zinc-800 tracking-wide select-all focus:ring-0 focus:outline-none"
                 />
               </div>
 
+              {/* VM Dropping Banner */}
+              {vmDropping && callState === 'active' && (
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-950/40 border border-amber-850 rounded-full text-amber-300 text-[10px] font-bold animate-pulse my-1 select-none">
+                  <Voicemail size={13} className="text-amber-400 shrink-0" />
+                  <span>Dropping Voicemail... (Auto-hangup when finished)</span>
+                </div>
+              )}
+
               {/* Mute indicator banner */}
-              {isMuted && callState === 'active' && (
+              {isMuted && callState === 'active' && !vmDropping && (
                 <span className="text-[9px] text-red-400 tracking-wider uppercase font-bold mt-1">
                   Microphone Muted
                 </span>
               )}
+
+              {/* Voicemail Hotkey cue */}
+              {!vmDropping && callState === 'active' && soundFiles[3] && (
+                <span className="text-[9px] text-zinc-500 font-mono mt-1 flex items-center gap-1 select-none">
+                  Press <kbd className="px-1 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-amber-400 font-bold text-[8px]">V</kbd> to Drop Voicemail
+                </span>
+              )}
             </div>
+
+            {/* Free Dial Success / Auto-drop Banner */}
+            {freeDialNotice && (
+              <div className="mx-2 mb-2 p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-800/50 text-emerald-300 text-[10px] text-center select-text relative flex items-center justify-between gap-1 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
+                <div className="flex items-center gap-1.5 mx-auto">
+                  <ShieldCheck size={13} className="text-emerald-400 shrink-0" />
+                  <span className="font-semibold">{freeDialNotice}</span>
+                </div>
+                <button onClick={() => setFreeDialNotice(null)} className="text-emerald-400 hover:text-emerald-200">
+                  <X size={12} />
+                </button>
+              </div>
+            )}
 
             {/* Error logs */}
             {errorMessage && (
