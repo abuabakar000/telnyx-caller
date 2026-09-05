@@ -1854,47 +1854,47 @@ export default function Dialer({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.18fr_1fr] items-stretch justify-center gap-5 xl:gap-6 max-w-7xl 2xl:max-w-[1440px] w-full mx-auto p-2 sm:p-4 z-10">
+    <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.18fr_1fr] items-stretch justify-center gap-6 max-w-[1400px] w-full mx-auto p-2 sm:p-4 z-10">
       {/* CALL HISTORY PANEL (LEFT) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-6 flex flex-col min-h-[520px]">
-        <div className="flex items-center justify-between mb-4 pb-2 border-b border-zinc-900">
-          <div className="flex items-center gap-2">
-            <Clock size={15} className="text-zinc-400" />
-            <h2 className="text-xs font-bold tracking-wider uppercase text-zinc-400 select-none">Recent Calls</h2>
+      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-5 sm:p-7 flex flex-col min-h-[520px]">
+        <div className="flex items-center justify-between mb-4 pb-3 border-b border-zinc-900">
+          <div className="flex items-center gap-2.5">
+            <Clock size={16} className="text-zinc-400" />
+            <h2 className="text-sm font-bold tracking-wider uppercase text-zinc-300 select-none">Recent Calls</h2>
           </div>
           {callHistory.length > 0 && (
             <button 
               onClick={clearHistory}
-              className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-red-400 transition-colors uppercase font-semibold"
+              className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-red-400 transition-colors uppercase font-bold"
             >
-              <Trash2 size={12} /> Clear
+              <Trash2 size={13} /> Clear
             </button>
           )}
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto pr-1.5 space-y-2.5 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent text-zinc-300">
+        <div className="flex-grow overflow-y-auto pr-1 space-y-2.5 max-h-[560px] scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent text-zinc-300">
           {callHistory.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full py-24 text-zinc-700">
+            <div className="flex flex-col items-center justify-center py-32 text-zinc-700 select-none">
               <PhoneCall size={36} className="opacity-15 mb-3" />
-              <p className="text-xs font-medium">No call logs available</p>
+              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">No call logs available</p>
             </div>
           ) : (
             callHistory.map((log) => (
               <div 
                 key={log.id} 
-                className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-900/20 border border-zinc-900 hover:bg-zinc-900/50 hover:border-zinc-800 transition-all duration-200 group"
+                className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-900/20 border border-zinc-900/60 hover:bg-zinc-900/50 hover:border-zinc-800/60 transition-all duration-200 group"
               >
                 <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-xl shrink-0 ${
+                  <div className={`p-2 rounded-xl ${
                     log.type === 'outgoing' ? 'bg-zinc-900/80 text-zinc-400' :
                     log.type === 'incoming' ? 'bg-emerald-950/30 text-emerald-400' :
                     'bg-red-950/30 text-red-400'
                   }`}>
-                    {log.type === 'outgoing' ? <ArrowUpRight size={14} /> : <ArrowDownLeft size={14} />}
+                    {log.type === 'outgoing' ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />}
                   </div>
                   <div className="text-left">
-                    <p className="text-sm font-bold font-mono text-zinc-200 group-hover:text-emerald-400 transition-colors">{log.number}</p>
-                    <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-zinc-500 font-medium">
+                    <p className="text-sm font-bold font-mono text-zinc-200 group-hover:text-white transition-colors">{log.number}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5 text-xs text-zinc-500 font-medium">
                       <span>{formatDate(log.timestamp)}</span>
                       <span>•</span>
                       <span>{formatTime(log.timestamp)}</span>
@@ -1914,7 +1914,7 @@ export default function Dialer({
                       setPhoneNumber(log.number);
                     }
                   }}
-                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:bg-emerald-500 hover:text-black hover:border-emerald-500 active:scale-95 transition-all duration-200 cursor-pointer"
+                  className="w-8 h-8 rounded-xl bg-zinc-950 text-zinc-500 hover:bg-emerald-500 hover:text-black hover:scale-105 active:scale-95 transition-all duration-200 border border-zinc-900 flex items-center justify-center shrink-0"
                   title="Copy to dialer"
                   disabled={callState !== 'idle'}
                 >
@@ -1927,31 +1927,31 @@ export default function Dialer({
       </div>
 
       {/* DIALER PANEL (MIDDLE) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-8 flex flex-col relative overflow-hidden min-h-[480px]">
+      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-5 sm:p-7 flex flex-col relative overflow-hidden min-h-[520px]">
         
         {/* Background light glow */}
         <div className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-zinc-800/5 via-transparent to-transparent pointer-events-none" />
 
         {/* Dialer Header */}
-        <div className="flex items-center justify-between mb-6 pb-2 border-b border-zinc-900 z-10">
-          <div className="flex items-center gap-1.5">
-            <span className={`relative flex h-1.5 w-1.5 rounded-full`}>
+        <div className="flex items-center justify-between mb-5 pb-3 border-b border-zinc-900 z-10">
+          <div className="flex items-center gap-2">
+            <span className={`relative flex h-2 w-2 rounded-full`}>
               {sipState === 'connected' && (
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               )}
-              <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${
                 sipState === 'connected' ? 'bg-emerald-500' :
                 sipState === 'connecting' ? 'bg-amber-500' :
                 sipState === 'error' ? 'bg-red-500' : 'bg-zinc-600'
               }`}></span>
             </span>
-            <span className="text-[10px] font-bold tracking-wider text-zinc-500 uppercase select-none">
+            <span className="text-xs font-bold tracking-wider text-zinc-400 uppercase select-none">
               {sipState === 'connected' ? 'Line Connected' : sipState === 'connecting' ? 'Connecting...' : 'Offline'}
             </span>
           </div>
 
           {/* Header Icons Container */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             {/* 4-Ring Guard Quick Toggle */}
             <button
               onClick={() => {
@@ -1959,14 +1959,14 @@ export default function Dialer({
                 setAutoDropEnabled(nextVal);
                 localStorage.setItem('telnyx_auto_4_ring', String(nextVal));
               }}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-bold uppercase tracking-wider transition-all duration-200 select-none ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[10px] font-bold uppercase tracking-wider transition-all duration-200 select-none ${
                 autoDropEnabled
                   ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]'
                   : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
               }`}
               title={autoDropEnabled ? `4-Ring Free Guard: Active (${autoDropMaxRings} rings / ${autoDropMaxRings * 4.5}s max)` : '4-Ring Free Guard: Disabled'}
             >
-              <Shield size={11} className={autoDropEnabled ? 'text-emerald-400' : 'text-zinc-500'} />
+              <Shield size={12} className={autoDropEnabled ? 'text-emerald-400' : 'text-zinc-500'} />
               <span>4-Ring Guard {autoDropEnabled ? 'ON' : 'OFF'}</span>
             </button>
 
@@ -1974,46 +1974,46 @@ export default function Dialer({
             {onScriptToggle && (
               <button
                 onClick={onScriptToggle}
-                className={`p-1.5 rounded-full border transition-all duration-200 ${
+                className={`p-2 rounded-full border transition-all duration-200 ${
                   scriptOpen
                     ? 'bg-zinc-800 border-zinc-700 text-zinc-100'
                     : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
                 }`}
                 title="Call Script"
               >
-                <FileText size={14} />
+                <FileText size={15} />
               </button>
             )}
             {/* Toggle Settings Icon */}
             <button 
               onClick={toggleSettings}
-              className={`p-1.5 rounded-full border transition-all duration-200 ${
+              className={`p-2 rounded-full border transition-all duration-200 ${
                 showSettings 
                   ? 'bg-zinc-800 border-zinc-700 text-zinc-100' 
                   : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
               }`}
               title="Audio Settings"
             >
-              <Settings size={14} />
+              <Settings size={15} />
             </button>
           </div>
         </div>
 
         {/* Status & Balance widgets */}
-        <div className="grid grid-cols-2 gap-3 mb-5 z-10 select-none">
+        <div className="grid grid-cols-2 gap-3.5 mb-5 z-10 select-none">
           {/* Balance Widget */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3.5 py-2 sm:py-2.5 bg-zinc-900/30 border border-zinc-900/80 rounded-2xl gap-1 sm:gap-0">
-            <span className="text-[9px] uppercase font-bold text-zinc-500 tracking-wider">Balance</span>
-            <span className="text-xs font-bold font-mono text-zinc-300">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between px-4 py-2.5 bg-zinc-900/40 border border-zinc-850 rounded-2xl gap-1 sm:gap-0">
+            <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Balance</span>
+            <span className="text-sm font-bold font-mono text-zinc-200">
               {fetchingStatus && (balance === '0.00' || balance === '0.000') ? '...' : `$${Number(balance || 0).toFixed(3)}`}
             </span>
           </div>
 
           {/* Number Health Widget */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3.5 py-2 sm:py-2.5 bg-zinc-900/30 border border-zinc-900/80 rounded-2xl gap-1 sm:gap-0">
-            <span className="text-[9px] uppercase font-bold text-zinc-500 tracking-wider">Number</span>
-            <div className="flex items-center gap-1.5">
-              <span className={`relative flex h-1.5 w-1.5 rounded-full`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between px-4 py-2.5 bg-zinc-900/40 border border-zinc-850 rounded-2xl gap-1 sm:gap-0">
+            <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Number</span>
+            <div className="flex items-center gap-2">
+              <span className={`relative flex h-2 w-2 rounded-full`}>
                 {numberHealth === 'healthy' && (
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 )}
@@ -2023,14 +2023,14 @@ export default function Dialer({
                 {numberHealth === 'inactive' && (
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                 )}
-                <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${
                   numberHealth === 'healthy' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' :
                   numberHealth === 'unconfigured' ? 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]' :
                   numberHealth === 'inactive' || numberHealth === 'not_found' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' :
                   'bg-zinc-600'
                 }`}></span>
               </span>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-300">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-200">
                 {numberHealth}
               </span>
             </div>
@@ -2267,22 +2267,22 @@ export default function Dialer({
           </div>
         ) : (
           /* DIALER PAD VIEW */
-          <div className="flex-1 flex flex-col justify-between items-center z-10 w-full py-1">
+          <div className="flex-grow flex flex-col justify-center gap-3 sm:gap-4 z-10 my-auto">
             
             {/* Number Input & Status displays */}
-            <div className="text-center flex flex-col justify-center items-center py-2 w-full select-none">
+            <div className="text-center flex flex-col justify-center items-center py-2 min-h-[90px] select-none">
               {/* Active Lead HUD */}
               {activeLead && callState !== 'idle' && (
-                <div className="mb-2 px-3 py-2 bg-[#00c896]/5 border border-[#00c896]/20 rounded-2xl text-center">
-                  <div className="flex items-center justify-center gap-2">
-                    <div className="w-6 h-6 rounded-full bg-[#00c896]/20 text-[#00c896] text-[9px] font-bold flex items-center justify-center">
+                <div className="mb-2 px-3.5 py-2 bg-[#00c896]/10 border border-[#00c896]/25 rounded-2xl text-center">
+                  <div className="flex items-center justify-center gap-2.5">
+                    <div className="w-7 h-7 rounded-full bg-[#00c896]/20 text-[#00c896] text-xs font-bold flex items-center justify-center">
                       {[activeLead.firstName[0], activeLead.lastName[0]].filter(Boolean).join('').toUpperCase() || '#'}
                     </div>
                     <div className="text-left">
-                      <p className="text-[11px] font-bold text-[#00c896]">{activeLead.firstName} {activeLead.lastName}</p>
+                      <p className="text-xs font-bold text-[#00c896]">{activeLead.firstName} {activeLead.lastName}</p>
                       {activeLead.company && (
-                        <p className="text-[9px] text-zinc-500 flex items-center gap-0.5">
-                          <Building2 size={8} /> {activeLead.company}
+                        <p className="text-[10px] text-zinc-400 flex items-center gap-1 font-medium">
+                          <Building2 size={10} /> {activeLead.company}
                         </p>
                       )}
                     </div>
@@ -2292,9 +2292,9 @@ export default function Dialer({
 
               {/* Outbound tag */}
               {callState === 'idle' && (
-                <div className="text-xs font-semibold tracking-wider text-zinc-500 uppercase mb-1.5">
+                <div className="text-xs font-semibold tracking-wider text-zinc-500 uppercase mb-1">
                   {activeLead
-                    ? <span className="text-[#00c896]/80 font-bold">Next: {activeLead.firstName} {activeLead.lastName}</span>
+                    ? <span className="text-[#00c896]">Next: {activeLead.firstName} {activeLead.lastName}</span>
                     : `Outbound Caller: ${telnyxNumber || 'Not configured'}`
                   }
                 </div>
@@ -2302,7 +2302,7 @@ export default function Dialer({
 
               {/* Dynamic Status message */}
               {callState !== 'idle' && (
-                <div className="text-xs font-bold tracking-widest text-emerald-400 uppercase mb-1.5 animate-pulse">
+                <div className="text-xs font-bold tracking-widest text-emerald-400 uppercase mb-1 animate-pulse">
                   {callState === 'dialing' && 'Connecting...'}
                   {callState === 'ringing' && 'Ringing...'}
                   {callState === 'active' && 'Connected'}
@@ -2312,14 +2312,14 @@ export default function Dialer({
 
               {/* Ticking call timer */}
               {callState === 'active' && (
-                <div className="text-sm font-semibold font-mono text-zinc-300 mb-1">
+                <div className="text-sm font-bold font-mono text-zinc-300 mb-1">
                   {formatDuration(callDuration)}
                 </div>
               )}
 
               {/* Real-time WebRTC Audio Spinners (Input and Output) */}
               {callState === 'active' && (
-                <div className="flex items-center gap-6 my-2.5">
+                <div className="flex items-center gap-6 my-2">
                   <div className="flex flex-col items-center gap-1 select-none">
                     <VolumeSpinner volume={inputVolume} icon={Mic} active={!isMuted} color="stroke-emerald-500" />
                     <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-400">Mic (In)</span>
@@ -2333,10 +2333,10 @@ export default function Dialer({
 
               {/* 4-Ring Rule Live Cadence & Progress Bar (Outbound Dialing / Ringing) */}
               {(callState === 'dialing' || callState === 'ringing') && currentCall?.direction !== 'inbound' && (
-                <div className="w-full max-w-[300px] flex flex-col items-center gap-2 my-2 px-3.5 py-2.5 bg-zinc-900/50 border border-zinc-850 rounded-2xl">
+                <div className="w-full max-w-[320px] flex flex-col items-center gap-2.5 my-2 px-3.5 py-3 bg-zinc-900/50 border border-zinc-850 rounded-2xl shadow-lg">
                   <div className="flex items-center justify-between w-full text-xs font-mono select-none">
                     <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
-                      <Shield size={13} className="text-emerald-400 animate-pulse shrink-0" />
+                      <Shield size={14} className="text-emerald-400 animate-pulse shrink-0" />
                       <span>{autoDropEnabled ? '4-Ring Auto-Guard' : 'Ring Tracker'}:</span>
                       <span className="text-zinc-200">
                         Ring {Math.min(autoDropMaxRings, Math.max(1, Math.floor(ringingSeconds / 4.5) + 1))} of {autoDropMaxRings}
@@ -2346,7 +2346,7 @@ export default function Dialer({
                   </div>
 
                   {/* Visual Ring Pips */}
-                  <div className="grid grid-cols-4 gap-1.5 w-full">
+                  <div className="grid grid-cols-4 gap-2 w-full">
                     {Array.from({ length: autoDropMaxRings }).map((_, idx) => {
                       const ringNum = idx + 1;
                       const currentRing = Math.floor(ringingSeconds / 4.5) + 1;
@@ -2358,14 +2358,14 @@ export default function Dialer({
                         <div key={idx} className="flex flex-col items-center gap-1">
                           <div className={`h-2 w-full rounded-full transition-all duration-200 ${
                             isPast 
-                              ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]' 
+                              ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' 
                               : isCurrent 
                                 ? isLastRing 
-                                  ? 'bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.6)]' 
-                                  : 'bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(16,185,129,0.4)]'
+                                  ? 'bg-amber-400 animate-pulse shadow-[0_0_10px_rgba(251,191,36,0.6)]' 
+                                  : 'bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.4)]'
                                 : 'bg-zinc-800'
                           }`} />
-                          <span className={`text-[9px] font-mono uppercase ${
+                          <span className={`text-[9px] font-mono font-bold uppercase ${
                             isPast || isCurrent 
                               ? (isLastRing ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold') 
                               : 'text-zinc-500'
@@ -2378,20 +2378,20 @@ export default function Dialer({
                   </div>
 
                   {/* Free Dial Notice & Escape Hint */}
-                  <div className="flex items-center justify-between w-full pt-1.5 border-t border-zinc-800 text-[10px] select-none">
-                    <span className="text-emerald-400 font-bold flex items-center gap-1">
+                  <div className="flex items-center justify-between w-full pt-1.5 border-t border-zinc-850/80 text-[10px] select-none">
+                    <span className="text-emerald-400 font-semibold flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-ping" />
                       $0.00 Free Dial
                     </span>
                     <span className="text-zinc-400 flex items-center gap-1 font-medium">
-                      Press <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-200 font-mono font-bold text-[9px]">ESC</kbd> to Drop Free
+                      Press <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-200 font-mono font-bold text-[9px]">ESC</kbd> to Drop
                     </span>
                   </div>
                 </div>
               )}
 
               {/* Interactive display field */}
-              <div className="relative w-full flex items-center justify-center px-2 my-1">
+              <div className="relative w-full flex items-center justify-center px-2 py-1">
                 <input
                   type="text"
                   value={formatPhoneNumber(phoneNumber)}
@@ -2413,7 +2413,7 @@ export default function Dialer({
 
               {/* VM Dropping Banner */}
               {vmDropping && callState === 'active' && (
-                <div className="flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-950/40 border border-amber-800/80 rounded-full text-amber-300 text-xs font-bold animate-pulse my-1 select-none">
+                <div className="flex items-center gap-2 px-3.5 py-1.5 bg-amber-950/40 border border-amber-850 rounded-full text-amber-300 text-xs font-bold animate-pulse my-1 select-none">
                   <Voicemail size={14} className="text-amber-400 shrink-0" />
                   <span>Dropping Voicemail... (Auto-hangup when finished)</span>
                 </div>
@@ -2428,7 +2428,7 @@ export default function Dialer({
 
               {/* Voicemail Hotkey cue */}
               {!vmDropping && callState === 'active' && soundFiles[3] && (
-                <span className="text-[10px] text-zinc-400 font-mono mt-1 flex items-center gap-1.5 select-none">
+                <span className="text-xs text-zinc-400 font-mono mt-1 flex items-center gap-1.5 select-none">
                   Press <kbd className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-amber-400 font-bold text-[9px]">V</kbd> to Drop Voicemail
                 </span>
               )}
@@ -2436,29 +2436,29 @@ export default function Dialer({
 
             {/* Free Dial Success / Auto-drop Banner */}
             {freeDialNotice && (
-              <div className="mx-2 mb-2 p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-800/50 text-emerald-300 text-xs text-center select-text relative flex items-center justify-between gap-1 shadow-[0_0_15px_rgba(16,185,129,0.1)] w-full max-w-[300px]">
-                <div className="flex items-center gap-1.5 mx-auto">
-                  <ShieldCheck size={14} className="text-emerald-400 shrink-0" />
-                  <span className="font-semibold">{freeDialNotice}</span>
+              <div className="mx-2 mb-1.5 p-3 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 text-emerald-300 text-xs text-center select-text relative flex items-center justify-between gap-1 shadow-[0_0_15px_rgba(16,185,129,0.15)]">
+                <div className="flex items-center gap-2 mx-auto font-medium">
+                  <ShieldCheck size={15} className="text-emerald-400 shrink-0" />
+                  <span>{freeDialNotice}</span>
                 </div>
-                <button onClick={() => setFreeDialNotice(null)} className="text-emerald-400 hover:text-emerald-200 cursor-pointer">
-                  <X size={13} />
+                <button onClick={() => setFreeDialNotice(null)} className="text-emerald-400 hover:text-emerald-200">
+                  <X size={14} />
                 </button>
               </div>
             )}
 
             {/* Error logs */}
             {errorMessage && (
-              <div className="mx-2 mb-2 p-2.5 rounded-xl bg-red-950/20 border border-red-900/35 text-red-400 text-xs text-center select-text relative flex items-center gap-1 justify-center w-full max-w-[300px]">
+              <div className="mx-2 mb-1.5 p-3 rounded-2xl bg-red-950/30 border border-red-900/50 text-red-300 text-xs text-center select-text relative flex items-center gap-2 justify-center">
                 <span>{errorMessage}</span>
-                <button onClick={() => setErrorMessage(null)} className="text-red-500 hover:text-red-300 cursor-pointer">
+                <button onClick={() => setErrorMessage(null)} className="text-red-400 hover:text-red-200">
                   <X size={12} />
                 </button>
               </div>
             )}
 
             {/* Dialer Keypad 3x4 Grid */}
-            <div className="grid grid-cols-3 gap-y-3.5 gap-x-4 sm:gap-x-6 justify-items-center py-2 w-full max-w-[19rem]">
+            <div className="grid grid-cols-3 gap-y-3.5 gap-x-3.5 sm:gap-x-6 justify-items-center py-1">
               {[
                 { digit: '1', letters: ' ' },
                 { digit: '2', letters: 'A B C' },
@@ -2476,12 +2476,12 @@ export default function Dialer({
                 <button
                   key={item.digit}
                   onClick={() => handleKeyPress(item.digit)}
-                  className="w-[4.2rem] h-[4.2rem] sm:w-[4.6rem] sm:h-[4.6rem] rounded-full flex flex-col items-center justify-center bg-zinc-950/90 border border-zinc-850/80 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-700 active:scale-90 active:bg-zinc-800 transition-all duration-150 select-none group cursor-pointer shadow-sm"
+                  className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex flex-col items-center justify-center bg-zinc-950 border border-zinc-900 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-800 active:scale-95 active:bg-zinc-800 transition-all duration-150 select-none group shadow-sm"
                   disabled={callState === 'ringing' || callState === 'done'}
                 >
-                  <span className="text-xl sm:text-2xl font-bold font-mono group-active:text-emerald-400 group-hover:text-white transition-colors">{item.digit}</span>
+                  <span className="text-xl sm:text-2xl font-bold font-mono group-active:text-emerald-400 transition-colors leading-none">{item.digit}</span>
                   {item.letters && (
-                    <span className="text-[9px] font-bold tracking-widest text-zinc-500 uppercase scale-90 mt-0.5">
+                    <span className="text-[9px] sm:text-[10px] font-bold tracking-widest text-zinc-500 uppercase mt-0.5">
                       {item.letters}
                     </span>
                   )}
@@ -2490,15 +2490,15 @@ export default function Dialer({
             </div>
 
             {/* Call / Action Controls Bar */}
-            <div className="flex items-center justify-between px-6 pt-3 pb-1 w-full max-w-[19rem]">
+            <div className="flex items-center justify-between px-6 pt-3 pb-1">
               <div className="w-12 h-12 flex items-center justify-center">
                 {callState === 'active' ? (
                   <button 
                     onClick={toggleMute}
-                    className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all active:scale-90 cursor-pointer ${
+                    className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all active:scale-90 ${
                       isMuted 
-                        ? 'bg-red-950/30 border-red-900/50 text-red-400 hover:bg-red-900/20' 
-                        : 'bg-zinc-900/80 border-zinc-800 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                        ? 'bg-red-950/40 border-red-900/60 text-red-400 hover:bg-red-900/30' 
+                        : 'bg-zinc-900 border-zinc-850 text-zinc-300 hover:bg-zinc-850 hover:text-white'
                     }`}
                     title={isMuted ? 'Unmute Mic' : 'Mute Mic'}
                   >
@@ -2508,7 +2508,7 @@ export default function Dialer({
                   callState === 'idle' && phoneNumber && (
                     <button 
                       onClick={handleClear}
-                      className="w-11 h-11 rounded-full bg-zinc-900/60 hover:bg-zinc-850 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-all active:scale-90 cursor-pointer"
+                      className="w-11 h-11 rounded-full bg-zinc-950 hover:bg-zinc-900 border border-zinc-900 flex items-center justify-center text-zinc-500 hover:text-zinc-200 transition-all"
                       title="Clear display"
                     >
                       <RotateCcw size={15} />
@@ -2522,10 +2522,10 @@ export default function Dialer({
                   <button
                     onClick={handleCall}
                     disabled={!phoneNumber || sipState !== 'connected'}
-                    className="w-16 h-16 rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-[0_4px_25px_rgba(16,185,129,0.3)] hover:shadow-[0_4px_30px_rgba(16,185,129,0.5)] disabled:bg-zinc-900 disabled:text-zinc-700 disabled:shadow-none disabled:cursor-not-allowed select-none border border-transparent cursor-pointer"
+                    className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(16,185,129,0.3)] hover:shadow-[0_4px_25px_rgba(16,185,129,0.45)] disabled:bg-zinc-900 disabled:text-zinc-700 disabled:shadow-none disabled:cursor-not-allowed select-none border border-transparent"
                     title="Call"
                   >
-                    <Phone size={22} fill="currentColor" />
+                    <Phone size={24} fill="currentColor" />
                   </button>
                 )}
 
@@ -2534,61 +2534,63 @@ export default function Dialer({
                     <div className="flex gap-3 items-center">
                       <button
                         onClick={handleReject}
-                        className="w-13 h-13 rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-md cursor-pointer"
+                        className="w-12 h-12 rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-md"
                         title="Decline"
                       >
-                        <PhoneOff size={19} />
+                        <PhoneOff size={20} />
                       </button>
                       <button
                         onClick={handleAnswer}
-                        className="w-13 h-13 rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-md animate-bounce cursor-pointer"
+                        className="w-12 h-12 rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-md animate-bounce"
                         title="Accept"
                       >
-                        <Phone size={19} fill="currentColor" />
+                        <Phone size={20} fill="currentColor" />
                       </button>
                     </div>
                   ) : (
                     <button
                       onClick={handleHangup}
-                      className="w-16 h-16 rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.3)] cursor-pointer"
+                      className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.35)]"
                       title="Hang Up"
                     >
-                      <PhoneOff size={22} />
+                      <PhoneOff size={24} />
                     </button>
                   )
                 )}
 
-                {(callState === 'dialing' || callState === 'active') && (
+                {callState === 'dialing' && (
                   <button
                     onClick={handleHangup}
-                    className="w-16 h-16 rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.3)] cursor-pointer"
-                    title="Hang Up"
+                    className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.35)]"
+                    title="Cancel Call"
                   >
-                    <PhoneOff size={22} />
+                    <PhoneOff size={24} />
                   </button>
                 )}
-                
-                {callState === 'done' && (
+
+                {callState === 'active' && (
                   <button
-                    disabled
-                    className="w-16 h-16 rounded-full flex items-center justify-center bg-zinc-900 text-zinc-650 cursor-not-allowed"
+                    onClick={handleHangup}
+                    className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.35)]"
+                    title="End Call"
                   >
-                    <PhoneOff size={22} />
+                    <PhoneOff size={24} />
                   </button>
                 )}
               </div>
 
               <div className="w-12 h-12 flex items-center justify-center">
-                {callState === 'idle' && phoneNumber && (
-                  <button
-                    onClick={handleBackspace}
-                    className="w-11 h-11 rounded-full bg-zinc-900/60 hover:bg-zinc-850 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-all active:scale-90 cursor-pointer"
-                    title="Backspace"
-                  >
-                    <Delete size={16} />
-                  </button>
-                )}
-                {callState === 'active' && (
+                {callState === 'idle' ? (
+                  phoneNumber && (
+                    <button 
+                      onClick={handleBackspace}
+                      className="w-11 h-11 rounded-full bg-zinc-950 hover:bg-zinc-900 border border-zinc-900 flex items-center justify-center text-zinc-500 hover:text-zinc-200 transition-all"
+                      title="Backspace"
+                    >
+                      <Delete size={17} />
+                    </button>
+                  )
+                ) : (
                   <button
                     onClick={() => {
                       if (!soundFiles[3] || vmDropping) return;
@@ -2596,16 +2598,16 @@ export default function Dialer({
                       togglePlaySound(3);
                     }}
                     disabled={!soundFiles[3] || vmDropping}
-                    className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all active:scale-90 cursor-pointer ${
+                    className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all active:scale-90 ${
                       vmDropping
                         ? 'bg-amber-500 text-black animate-pulse border-amber-400'
                         : soundFiles[3]
-                          ? 'bg-amber-950/30 border-amber-900/50 text-amber-400 hover:bg-amber-900/20'
+                          ? 'bg-amber-950/40 border-amber-900/60 text-amber-400 hover:bg-amber-900/30'
                           : 'bg-zinc-950 border-zinc-900 text-zinc-700 cursor-not-allowed'
                     }`}
                     title={soundFiles[3] ? 'Drop Voicemail (V)' : 'Upload VM Audio file in Settings first'}
                   >
-                    <Voicemail size={16} />
+                    <Voicemail size={17} />
                   </button>
                 )}
               </div>
@@ -2616,22 +2618,22 @@ export default function Dialer({
       </div>
 
       {/* QUICK SMS PANEL (RIGHT) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-6 flex flex-col min-h-[520px] h-full justify-between overflow-hidden">
-        <div className="flex flex-col h-full flex-1 min-h-0">
+      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-5 sm:p-7 flex flex-col min-h-[520px] h-full justify-between overflow-hidden">
+        <div className="flex flex-col h-full flex-grow min-h-0">
           {/* Header */}
           <div className="flex items-center justify-between mb-2 pb-2 border-b border-zinc-900 select-none">
-            <div className="flex items-center gap-2">
-              <MessageSquare size={15} className="text-emerald-400" />
-              <h2 className="text-xs font-bold tracking-wider uppercase text-zinc-400">Quick SMS</h2>
+            <div className="flex items-center gap-2.5">
+              <MessageSquare size={16} className="text-emerald-400" />
+              <h2 className="text-sm font-bold tracking-wider uppercase text-zinc-300">Quick SMS</h2>
             </div>
             
             {/* Active Phone Indicator */}
             {(activeLead?.phone || phoneNumber) ? (
-              <span className="text-xs font-mono text-zinc-300 bg-zinc-900 px-2.5 py-0.5 rounded-full border border-zinc-800 font-semibold">
+              <span className="text-xs font-mono font-semibold text-zinc-300 bg-zinc-900 px-3 py-1 rounded-full border border-zinc-800">
                 {activeLead?.phone || phoneNumber}
               </span>
             ) : (
-              <span className="text-[10px] font-bold text-zinc-500 bg-zinc-900/50 px-2.5 py-0.5 rounded-full uppercase tracking-wider border border-zinc-900">
+              <span className="text-[10px] font-bold text-zinc-500 bg-zinc-900/50 px-2.5 py-1 rounded-full uppercase tracking-wider">
                 Idle
               </span>
             )}
@@ -2639,7 +2641,7 @@ export default function Dialer({
 
           {/* Sender SMS Number */}
           {telnyxSmsNumber && (
-            <div className="text-[10px] font-semibold text-zinc-500 mb-2 pb-1.5 border-b border-zinc-900/60 select-none flex items-center justify-between">
+            <div className="text-[10px] font-semibold text-zinc-500 mb-3 pb-1 border-b border-zinc-900/60 select-none flex items-center justify-between">
               <span>Sending from:</span>
               <span className="font-mono text-zinc-400">{telnyxSmsNumber}</span>
             </div>
@@ -2648,8 +2650,8 @@ export default function Dialer({
           {/* Target number block check */}
           {!(activeLead?.phone || phoneNumber) ? (
             /* NO NUMBER IN QUEUE STATE */
-            <div className="flex-1 flex flex-col items-center justify-center text-center p-6 select-none my-auto">
-              <div className="w-14 h-14 rounded-full bg-zinc-900/60 border border-zinc-850 flex items-center justify-center mb-3 text-zinc-600">
+            <div className="flex-grow flex flex-col items-center justify-center text-center p-6 select-none my-auto">
+              <div className="w-14 h-14 rounded-full bg-zinc-900 border border-zinc-850 flex items-center justify-center mb-3.5 text-zinc-600 shadow-inner">
                 <MessageSquare size={24} />
               </div>
               <p className="text-sm font-bold text-zinc-300 uppercase tracking-wide">No Active Number</p>
@@ -2659,9 +2661,9 @@ export default function Dialer({
             </div>
           ) : (
             /* SMS WORKSPACE STATE */
-            <div className="flex flex-col flex-1 min-h-0 h-full">
+            <div className="flex flex-col flex-grow min-h-0 h-full">
               {/* Message Feed */}
-              <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1.5 pb-4 scrollbar-thin scrollbar-thumb-zinc-900 scrollbar-track-transparent">
+              <div className="flex-grow overflow-y-auto space-y-3 pr-1 pb-4 scrollbar-thin scrollbar-thumb-zinc-900 scrollbar-track-transparent min-h-[260px] max-h-[500px]">
                 {smsMessages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center p-6 select-none my-auto">
                     <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">No message history</p>
@@ -2678,7 +2680,7 @@ export default function Dialer({
                         className={`flex flex-col ${isOutbound ? 'items-end' : 'items-start'}`}
                       >
                         <div
-                          className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs sm:text-[13px] leading-relaxed select-text ${
+                          className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed select-text ${
                             isOutbound
                               ? 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-100 rounded-tr-none'
                               : 'bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-tl-none'
@@ -2694,8 +2696,8 @@ export default function Dialer({
                             <>
                               <span>•</span>
                               <span className={
-                                msg.status === 'delivered' ? 'text-emerald-500' :
-                                msg.status === 'failed' ? 'text-red-500' : 'text-zinc-500'
+                                msg.status === 'delivered' ? 'text-emerald-400' :
+                                msg.status === 'failed' ? 'text-red-400' : 'text-zinc-500'
                               }>
                                 {msg.status}
                               </span>
@@ -2713,11 +2715,11 @@ export default function Dialer({
               <form onSubmit={handleSendSms} className="pt-2.5 border-t border-zinc-900 mt-auto select-none">
                 {/* Template Selector dropdown */}
                 {smsTemplates.length > 0 && (
-                  <div className="mb-2">
+                  <div className="mb-2.5">
                     <select
                       value={selectedTemplateId}
                       onChange={(e) => handleTemplateChange(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-900 rounded-xl px-3 py-2 text-xs font-bold text-zinc-400 focus:outline-none focus:border-zinc-800 transition-colors uppercase tracking-wider cursor-pointer"
+                      className="w-full bg-zinc-950 border border-zinc-900 rounded-xl px-3 py-2 text-xs font-bold text-zinc-300 focus:outline-none focus:border-zinc-800 transition-colors uppercase tracking-wider cursor-pointer"
                     >
                       <option value="">-- Use a template --</option>
                       {smsTemplates.map(t => (
@@ -2735,8 +2737,8 @@ export default function Dialer({
                     value={smsInput}
                     onChange={(e) => setSmsInput(e.target.value)}
                     placeholder="Type a message..."
-                    className="flex-grow bg-transparent border-0 resize-none px-2.5 py-1 text-xs sm:text-[13px] text-zinc-200 placeholder-zinc-600 focus:ring-0 focus:outline-none scrollbar-none max-h-[120px]"
-                    style={{ height: 'auto', minHeight: '26px' }}
+                    className="flex-grow bg-transparent border-0 resize-none px-2.5 py-1 text-sm text-zinc-100 placeholder-zinc-500 focus:ring-0 focus:outline-none scrollbar-none max-h-[140px]"
+                    style={{ height: 'auto', minHeight: '28px' }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
@@ -2747,12 +2749,12 @@ export default function Dialer({
                   <button
                     type="submit"
                     disabled={isSendingSms || !smsInput.trim()}
-                    className="w-9 h-9 rounded-xl bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 disabled:bg-zinc-900 disabled:text-zinc-700 transition-all flex items-center justify-center flex-shrink-0 cursor-pointer"
+                    className="w-9 h-9 rounded-xl bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 disabled:bg-zinc-900 disabled:text-zinc-700 transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm"
                   >
                     {isSendingSms ? (
-                      <Loader2 size={14} className="animate-spin" />
+                      <Loader2 size={15} className="animate-spin" />
                     ) : (
-                      <Send size={14} />
+                      <Send size={15} fill="currentColor" />
                     )}
                   </button>
                 </div>

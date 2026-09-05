@@ -254,18 +254,18 @@ export default function Home() {
       <Navbar />
 
       {/* ─── Dashboard Stats Bar ───────────────────────────────── */}
-      <div className="z-10 w-full max-w-7xl 2xl:max-w-[1440px]">
+      <div className="z-10 w-full max-w-[1400px]">
         <div className="bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 rounded-2xl px-6 py-3.5 flex items-center gap-6">
           {STAT_ITEMS.map((stat) => {
             const Icon = stat.icon;
             return (
               <div key={stat.label} className="flex items-center gap-2.5 flex-1">
-                <div className="p-2 rounded-xl bg-zinc-900/60 border border-zinc-850 shrink-0">
-                  <Icon size={13} className="text-zinc-400" />
+                <div className="p-2 rounded-xl bg-zinc-900/70 border border-zinc-900 shrink-0">
+                  <Icon size={14} className="text-zinc-400" />
                 </div>
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 leading-none">{stat.label}</p>
-                  <p className={`text-base font-bold font-mono mt-0.5 ${stat.color}`}>{stat.value}</p>
+                  <p className={`text-base font-bold font-mono mt-1 ${stat.color}`}>{stat.value}</p>
                 </div>
               </div>
             );
@@ -300,7 +300,7 @@ export default function Home() {
       </div>
 
       {/* ─── Main area: Dialer centered ────────────────────────── */}
-      <main className="z-10 w-full max-w-7xl 2xl:max-w-[1440px] flex-grow flex justify-center items-start pb-6">
+      <main className="z-10 w-full max-w-[1400px] flex-grow flex justify-center items-start pb-6">
         <div className="w-full flex justify-center">
           <Dialer
             activeLead={activeLead ? {

@@ -30,14 +30,14 @@ export default function Navbar() {
   ];
 
   return (
-    <header className="w-full max-w-7xl 2xl:max-w-[1440px] mx-auto px-4 pt-4 select-none z-20">
+    <header className="w-full max-w-[1400px] mx-auto px-4 pt-4 select-none z-20">
       <div className="bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-2xl px-6 py-4 flex items-center justify-between gap-4">
         {/* Logo / Branding */}
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-[#00c896]/10 border border-[#00c896]/20 text-[#00c896]">
-            <PhoneCall size={16} />
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-[#00c896]/10 border border-[#00c896]/20 text-[#00c896]">
+            <PhoneCall size={18} />
           </div>
-          <span className="text-xs font-bold tracking-widest text-zinc-200 uppercase">
+          <span className="text-sm font-bold tracking-widest text-zinc-100 uppercase">
             Inex Labs Suite
           </span>
         </div>
@@ -55,10 +55,10 @@ export default function Navbar() {
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all duration-200 ${
                   isActive
                     ? 'bg-zinc-900 border border-zinc-800 text-[#00c896] shadow-sm shadow-[#00c896]/5'
-                    : 'text-zinc-500 hover:text-zinc-300 border border-transparent'
+                    : 'text-zinc-400 hover:text-zinc-200 border border-transparent hover:bg-zinc-900/50'
                 }`}
               >
-                <Icon size={13} />
+                <Icon size={14} />
                 <span>{item.label}</span>
               </Link>
             );
