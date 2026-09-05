@@ -87,10 +87,10 @@ export async function GET() {
     }
 
     return NextResponse.json({
-      balance: balanceData?.balance || '0.00',
+      balance: balanceData?.balance || '0.000',
       currency: balanceData?.currency || 'USD',
-      creditLimit: balanceData?.credit_limit || '0.00',
-      availableCredit: balanceData?.available_credit || '0.00',
+      creditLimit: balanceData?.credit_limit || '0.000',
+      availableCredit: balanceData?.available_credit || '0.000',
       number: telnyxNumber || null,
       smsNumber: process.env.TELNYX_PHONE_NUMBER || null,
       numberStatus: numberDetails?.status || 'unknown',

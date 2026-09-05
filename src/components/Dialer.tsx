@@ -300,7 +300,7 @@ export default function Dialer({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Account status and health
-  const [balance, setBalance] = useState<string>('0.00');
+  const [balance, setBalance] = useState<string>('0.000');
   const [numberHealth, setNumberHealth] = useState<string>('unknown');
   const [fetchingStatus, setFetchingStatus] = useState<boolean>(false);
 
@@ -1214,7 +1214,7 @@ export default function Dialer({
         }
         const data = await response.json();
         if (active) {
-          setBalance(data.balance || '0.00');
+          setBalance(data.balance || '0.000');
           setNumberHealth(data.numberHealth || 'unknown');
           if (data.number) {
             setTelnyxNumber(data.number);
@@ -2005,7 +2005,7 @@ export default function Dialer({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3.5 py-2 sm:py-2.5 bg-zinc-900/30 border border-zinc-900/80 rounded-2xl gap-1 sm:gap-0">
             <span className="text-[9px] uppercase font-bold text-zinc-500 tracking-wider">Balance</span>
             <span className="text-xs font-bold font-mono text-zinc-300">
-              {fetchingStatus && balance === '0.00' ? '...' : `$${Number(balance).toFixed(2)}`}
+              {fetchingStatus && (balance === '0.00' || balance === '0.000') ? '...' : `$${Number(balance || 0).toFixed(3)}`}
             </span>
           </div>
 
