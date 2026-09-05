@@ -254,45 +254,45 @@ export default function Home() {
       <Navbar />
 
       {/* ─── Dashboard Stats Bar ───────────────────────────────── */}
-      <div className="z-10 w-full max-w-6xl">
-        <div className="bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 rounded-2xl px-5 py-3 flex items-center gap-6">
+      <div className="z-10 w-full max-w-7xl 2xl:max-w-[1440px]">
+        <div className="bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 rounded-2xl px-6 py-3.5 flex items-center gap-6">
           {STAT_ITEMS.map((stat) => {
             const Icon = stat.icon;
             return (
-              <div key={stat.label} className="flex items-center gap-2 flex-1">
-                <div className="p-1.5 rounded-lg bg-zinc-900/60 border border-zinc-900 shrink-0">
-                  <Icon size={11} className="text-zinc-500" />
+              <div key={stat.label} className="flex items-center gap-2.5 flex-1">
+                <div className="p-2 rounded-xl bg-zinc-900/60 border border-zinc-850 shrink-0">
+                  <Icon size={13} className="text-zinc-400" />
                 </div>
                 <div>
-                  <p className="text-[8px] font-bold uppercase tracking-wider text-zinc-600 leading-none">{stat.label}</p>
-                  <p className={`text-sm font-bold font-mono mt-0.5 ${stat.color}`}>{stat.value}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 leading-none">{stat.label}</p>
+                  <p className={`text-base font-bold font-mono mt-0.5 ${stat.color}`}>{stat.value}</p>
                 </div>
               </div>
             );
           })}
 
           {/* Panel toggle buttons inside stat bar */}
-          <div className="flex items-center gap-2 ml-auto shrink-0">
+          <div className="flex items-center gap-2.5 ml-auto shrink-0">
             <button
               onClick={() => { setShowLeadQueue(v => !v); setShowKanban(false); }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[10px] font-bold uppercase tracking-wider transition-all ${
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-bold uppercase tracking-wider transition-all ${
                 showLeadQueue
                   ? 'bg-[#00c896]/10 border-[#00c896]/30 text-[#00c896]'
-                  : 'bg-zinc-900/40 border-zinc-800 text-zinc-500 hover:text-zinc-300'
+                  : 'bg-zinc-900/40 border-zinc-800 text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <Users size={11} />
+              <Users size={13} />
               Leads {leads.length > 0 && <span className="font-mono">{leads.length}</span>}
             </button>
             <button
               onClick={() => { setShowKanban(v => !v); setShowLeadQueue(false); }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[10px] font-bold uppercase tracking-wider transition-all ${
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-bold uppercase tracking-wider transition-all ${
                 showKanban
                   ? 'bg-[#00c896]/10 border-[#00c896]/30 text-[#00c896]'
-                  : 'bg-zinc-900/40 border-zinc-800 text-zinc-500 hover:text-zinc-300'
+                  : 'bg-zinc-900/40 border-zinc-800 text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <Layers size={11} />
+              <Layers size={13} />
               Pipeline
             </button>
           </div>
@@ -300,7 +300,7 @@ export default function Home() {
       </div>
 
       {/* ─── Main area: Dialer centered ────────────────────────── */}
-      <main className="z-10 w-full max-w-6xl flex-grow flex justify-center items-start pb-6">
+      <main className="z-10 w-full max-w-7xl 2xl:max-w-[1440px] flex-grow flex justify-center items-start pb-6">
         <div className="w-full flex justify-center">
           <Dialer
             activeLead={activeLead ? {

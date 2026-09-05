@@ -30,7 +30,7 @@ export default function Navbar() {
   ];
 
   return (
-    <header className="w-full max-w-6xl mx-auto px-4 pt-4 select-none z-20">
+    <header className="w-full max-w-7xl 2xl:max-w-[1440px] mx-auto px-4 pt-4 select-none z-20">
       <div className="bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-2xl px-6 py-4 flex items-center justify-between gap-4">
         {/* Logo / Branding */}
         <div className="flex items-center gap-2">
