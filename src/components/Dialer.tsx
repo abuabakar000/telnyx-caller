@@ -403,6 +403,7 @@ export default function Dialer({
   const [availableNumbers, setAvailableNumbers] = useState<string[]>([]);
   const [newNumberInput, setNewNumberInput] = useState('');
   const [showNumberDropdown, setShowNumberDropdown] = useState(false);
+  const [confirmDeleteNumber, setConfirmDeleteNumber] = useState<string | null>(null);
   const telnyxNumberRef = useRef('');
 
   // Audio Device Selection
@@ -1699,8 +1700,9 @@ export default function Dialer({
         if (active) {
           setBalance(data.balance || '0.000');
           setNumberHealth(data.numberHealth || 'unknown');
-          if (data.number) {
-            setAvailableNumbers(prev => Array.from(new Set([data.number, ...prev].filter(Boolean))));
+          const serverNumbers = [data.number, data.smsNumber].filter(Boolean);
+          if (serverNumbers.length > 0) {
+            setAvailableNumbers(prev => Array.from(new Set([...serverNumbers, ...prev].filter(Boolean))));
             const savedActive = localStorage.getItem('telnyx_active_number');
             const targetLine = savedActive || data.number;
             if (!savedActive) {
@@ -2062,12 +2064,17 @@ export default function Dialer({
 
   // Toggle Settings view and microphone local loopback test
   const toggleSettings = async () => {
+    setShowNumberDropdown(false);
     const nextState = !showSettings;
     setShowSettings(nextState);
     if (nextState) {
-      await loadAudioDevices(true);
-      const savedMic = localStorage.getItem('telnyx_selected_mic') || '';
-      startSettingsMicTest(savedMic);
+      try {
+        await loadAudioDevices(true);
+        const savedMic = localStorage.getItem('telnyx_selected_mic') || '';
+        startSettingsMicTest(savedMic);
+      } catch (e) {
+        console.warn('Failed to initialize settings audio devices:', e);
+      }
     } else {
       stopSettingsMicTest();
     }
@@ -2792,7 +2799,7 @@ export default function Dialer({
         <div className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-zinc-800/5 via-transparent to-transparent pointer-events-none" />
 
         {/* Dialer Header */}
-        <div className="flex items-center justify-between mb-5 pb-3 border-b border-zinc-900 z-10 gap-3">
+        <div className="flex items-center justify-between mb-5 pb-3 border-b border-zinc-900 relative z-30 gap-3">
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2">
               <span className={`relative flex h-2 w-2 rounded-full`}>
@@ -2811,7 +2818,7 @@ export default function Dialer({
             </div>
 
             {telnyxNumber && (
-              <div className="relative inline-flex items-center">
+              <div className="relative inline-flex items-center z-40">
                 {availableNumbers.length > 1 ? (
                   <button
                     type="button"
@@ -2834,10 +2841,10 @@ export default function Dialer({
                 {showNumberDropdown && availableNumbers.length > 1 && (
                   <>
                     <div 
-                      className="fixed inset-0 z-40" 
+                      className="fixed inset-0 z-30" 
                       onClick={() => setShowNumberDropdown(false)} 
                     />
-                    <div className="absolute top-full mt-2 left-0 z-50 min-w-[240px] p-1.5 rounded-2xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-1">
+                    <div className="absolute top-full mt-2 left-0 z-50 min-w-[260px] p-2 rounded-2xl bg-[#09090b] border border-zinc-850 shadow-[0_20px_50px_rgba(0,0,0,0.9)] space-y-1">
                       <div className="px-2.5 py-1 text-[9px] uppercase font-bold text-zinc-500 tracking-wider">
                         Switch Active Line
                       </div>
@@ -2849,7 +2856,7 @@ export default function Dialer({
                             switchActiveNumber(num);
                             setShowNumberDropdown(false);
                           }}
-                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-mono transition-all text-left ${
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-mono transition-all text-left cursor-pointer ${
                             telnyxNumber === num
                               ? 'bg-emerald-500/15 text-emerald-300 font-bold border border-emerald-500/25'
                               : 'text-zinc-400 hover:text-white hover:bg-zinc-900 border border-transparent'
@@ -2871,16 +2878,20 @@ export default function Dialer({
           </div>
 
           {/* Header Icons Container */}
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 relative z-50">
             {/* Toggle Settings Icon */}
             <button 
-              onClick={toggleSettings}
-              className={`p-2 rounded-full border transition-all duration-200 ${
+              type="button"
+              onClick={() => {
+                setShowNumberDropdown(false);
+                toggleSettings();
+              }}
+              className={`p-2 rounded-full border transition-all duration-200 cursor-pointer ${
                 showSettings 
-                  ? 'bg-zinc-800 border-zinc-700 text-zinc-100' 
-                  : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
+                  ? 'bg-zinc-800 border-zinc-700 text-emerald-400 ring-2 ring-emerald-500/20 shadow-sm' 
+                  : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
               }`}
-              title="Audio Settings"
+              title={showSettings ? "Close Settings" : "Audio Settings"}
             >
               <Settings size={15} />
             </button>
@@ -2888,7 +2899,7 @@ export default function Dialer({
         </div>
 
         {/* Status & Balance widgets */}
-        <div className="grid grid-cols-2 gap-3.5 mb-5 z-10 select-none">
+        <div className="grid grid-cols-2 gap-3.5 mb-5 select-none relative z-0">
           {/* Balance Widget */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between px-4 py-2.5 bg-zinc-900/40 border border-zinc-850 rounded-2xl gap-1 sm:gap-0">
             <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Balance</span>
@@ -3038,9 +3049,9 @@ export default function Dialer({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleRemoveNumber(num);
+                            setConfirmDeleteNumber(num);
                           }}
-                          className="text-zinc-600 hover:text-red-400 p-1 transition-colors"
+                          className="text-zinc-600 hover:text-red-400 p-1.5 rounded-lg hover:bg-red-500/10 transition-colors cursor-pointer"
                           title="Remove line"
                         >
                           <X size={12} />
@@ -4165,6 +4176,47 @@ export default function Dialer({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM REMOVE NUMBER MODAL */}
+      {confirmDeleteNumber && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-zinc-950 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/10 border border-rose-500/25 flex items-center justify-center text-rose-400 shrink-0">
+                <Trash2 size={18} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-zinc-100">Remove Phone Line</h3>
+                <p className="text-xs text-zinc-400 mt-0.5">Are you sure you want to remove this line?</p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-850 font-mono text-xs text-zinc-100 text-center font-bold tracking-wide">
+              {formatPhoneNumber(confirmDeleteNumber)}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteNumber(null)}
+                className="px-4 py-2 rounded-xl border border-zinc-800 text-xs font-semibold text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleRemoveNumber(confirmDeleteNumber);
+                  setConfirmDeleteNumber(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold shadow-lg shadow-rose-500/20 transition-all active:scale-95 cursor-pointer"
+              >
+                Remove Line
+              </button>
+            </div>
           </div>
         </div>
       )}
