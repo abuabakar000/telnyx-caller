@@ -429,6 +429,16 @@ export default function Dialer({
   const [historyFilter, setHistoryFilter] = useState<'all' | 'missed'>('all');
   const [callDuration, setCallDuration] = useState(0);
 
+  // Mobile responsive tab navigation ('dialer' | 'recents' | 'sms')
+  const [mobileTab, setMobileTab] = useState<'dialer' | 'recents' | 'sms'>('dialer');
+
+  // Auto-switch to dialer keypad on mobile when call initiates or arrives
+  useEffect(() => {
+    if (callState !== 'idle') {
+      setMobileTab('dialer');
+    }
+  }, [callState]);
+
   // Saved Numbers & Contacts State
   const [leftPanelTab, setLeftPanelTab] = useState<'recents' | 'contacts'>('recents');
   const [contacts, setContacts] = useState<SavedContact[]>([]);
@@ -651,6 +661,7 @@ export default function Dialer({
     setSmsView('chat');
     setShowNewChatInput(false);
     setNewChatNumber('');
+    setMobileTab('sms');
     loadSmsHistory(cleaned, telnyxNumberRef.current);
   };
 
@@ -2417,9 +2428,69 @@ export default function Dialer({
   });
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.18fr_1fr] items-stretch justify-center gap-6 max-w-[1400px] w-full mx-auto p-2 sm:p-4 z-10">
-      {/* CALL HISTORY & SAVED CONTACTS PANEL (LEFT) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-5 sm:p-7 flex flex-col min-h-[520px]">
+    <div className="w-full max-w-[1400px] mx-auto p-1.5 sm:p-4 z-10 flex flex-col">
+      {/* Mobile Top Navigation Tabs (Only visible on screens < lg) */}
+      <div className="lg:hidden w-full mb-3 flex items-center justify-between p-1 rounded-2xl bg-zinc-950/90 border border-zinc-850 backdrop-blur-xl shadow-xl select-none">
+        <button
+          type="button"
+          onClick={() => setMobileTab('dialer')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all ${
+            mobileTab === 'dialer'
+              ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/20'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+          }`}
+        >
+          <Phone size={14} />
+          <span>Keypad</span>
+          {callState !== 'idle' && (
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping ml-0.5" />
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMobileTab('recents')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all ${
+            mobileTab === 'recents'
+              ? 'bg-zinc-800 text-white shadow-md'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+          }`}
+        >
+          <Clock size={14} />
+          <span>Recents</span>
+          {callHistory.length > 0 && (
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ${
+              mobileTab === 'recents' ? 'bg-zinc-700 text-zinc-200' : 'bg-zinc-900 text-zinc-400 border border-zinc-800'
+            }`}>
+              {callHistory.length}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMobileTab('sms')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all relative ${
+            mobileTab === 'sms'
+              ? 'bg-zinc-800 text-white shadow-md'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+          }`}
+        >
+          <MessageSquare size={14} />
+          <span>Messages</span>
+          {totalUnreadSms > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500 text-black leading-none ml-0.5 animate-pulse shadow-sm">
+              {totalUnreadSms}
+            </span>
+          )}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.18fr_1fr] items-stretch justify-center gap-4 sm:gap-6 w-full">
+        {/* CALL HISTORY & SAVED CONTACTS PANEL (LEFT) */}
+        <div className={`w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-2xl sm:rounded-[2rem] p-4 sm:p-7 flex-col min-h-[480px] sm:min-h-[520px] ${
+          mobileTab === 'recents' ? 'flex' : 'hidden lg:flex'
+        }`}>
         {/* Panel Header with Tabs */}
         <div className="flex items-center justify-between mb-3 pb-3 border-b border-zinc-900 gap-2">
           <div className="flex items-center gap-1 bg-zinc-900/80 p-1 rounded-xl border border-zinc-850 select-none">
@@ -2570,6 +2641,7 @@ export default function Dialer({
                           onClick={() => {
                             if (callState === 'idle') {
                               setPhoneNumber(log.number);
+                              setMobileTab('dialer');
                             }
                           }}
                           className="min-w-0 flex-1 text-left cursor-pointer select-none"
@@ -2640,6 +2712,7 @@ export default function Dialer({
                           onClick={() => {
                             if (callState === 'idle') {
                               setPhoneNumber(log.number);
+                              setMobileTab('dialer');
                             }
                           }}
                           className={`w-8 h-8 rounded-xl bg-zinc-950 border transition-all duration-200 flex items-center justify-center shrink-0 ${
@@ -2721,6 +2794,7 @@ export default function Dialer({
                         onClick={() => {
                           if (callState === 'idle') {
                             setPhoneNumber(contact.phoneNumber);
+                            setMobileTab('dialer');
                           }
                         }}
                         className="flex items-center gap-3 min-w-0 flex-1 mr-2 cursor-pointer"
@@ -2745,6 +2819,7 @@ export default function Dialer({
                           onClick={() => {
                             if (callState === 'idle') {
                               setPhoneNumber(contact.phoneNumber);
+                              setMobileTab('dialer');
                             }
                           }}
                           className="w-8 h-8 rounded-xl bg-zinc-950 border border-zinc-900 text-zinc-500 hover:bg-emerald-500 hover:text-black hover:border-emerald-500 hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center shrink-0 cursor-pointer"
@@ -2793,7 +2868,9 @@ export default function Dialer({
       </div>
 
       {/* DIALER PANEL (MIDDLE) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-5 sm:p-7 flex flex-col relative overflow-hidden min-h-[520px]">
+      <div className={`w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-2xl sm:rounded-[2rem] p-4 sm:p-7 flex-col relative overflow-hidden min-h-[480px] sm:min-h-[520px] ${
+        mobileTab === 'dialer' ? 'flex' : 'hidden lg:flex'
+      }`}>
         
         {/* Background light glow */}
         <div className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-zinc-800/5 via-transparent to-transparent pointer-events-none" />
@@ -3403,7 +3480,7 @@ export default function Dialer({
                   }}
                   placeholder="Enter number"
                   disabled={callState !== 'idle'}
-                  className="w-full bg-transparent border-none outline-none text-center text-3xl sm:text-4xl font-bold font-mono text-zinc-100 placeholder-zinc-800 tracking-wide select-all focus:ring-0 focus:outline-none"
+                  className="w-full bg-transparent border-none outline-none text-center text-2xl sm:text-4xl font-bold font-mono text-zinc-100 placeholder-zinc-800 tracking-wide select-all focus:ring-0 focus:outline-none"
                 />
 
                 {/* Save Contact Button when number is typed and unsaved */}
@@ -3412,7 +3489,7 @@ export default function Dialer({
                     <button
                       type="button"
                       onClick={() => handleOpenSaveContactModal(phoneNumber, '')}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 hover:border-zinc-700 text-xs font-semibold transition-all duration-150 shadow-sm cursor-pointer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 hover:border-zinc-700 text-xs font-semibold transition-all duration-150 shadow-sm cursor-pointer touch-manipulation"
                       title="Save this number to Contacts"
                     >
                       <UserPlus size={12} className="text-emerald-400" />
@@ -3469,7 +3546,7 @@ export default function Dialer({
             )}
 
             {/* Dialer Keypad 3x4 Grid */}
-            <div className="grid grid-cols-3 gap-y-3.5 gap-x-3.5 sm:gap-x-6 justify-items-center py-1">
+            <div className="grid grid-cols-3 gap-y-3 sm:gap-y-3.5 gap-x-3 sm:gap-x-6 justify-items-center py-1">
               {[
                 { digit: '1', letters: ' ' },
                 { digit: '2', letters: 'A B C' },
@@ -3487,7 +3564,7 @@ export default function Dialer({
                 <button
                   key={item.digit}
                   onClick={() => handleKeyPress(item.digit)}
-                  className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex flex-col items-center justify-center bg-zinc-950 border border-zinc-900 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-800 active:scale-95 active:bg-zinc-800 transition-all duration-150 select-none group shadow-sm"
+                  className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex flex-col items-center justify-center bg-zinc-950 border border-zinc-900 text-zinc-100 hover:bg-zinc-900 hover:border-zinc-800 active:scale-95 active:bg-zinc-800 transition-all duration-150 select-none group shadow-sm touch-manipulation"
                   disabled={callState === 'ringing' || callState === 'done'}
                 >
                   <span className="text-xl sm:text-2xl font-bold font-mono group-active:text-emerald-400 transition-colors leading-none">{item.digit}</span>
@@ -3501,12 +3578,12 @@ export default function Dialer({
             </div>
 
             {/* Call / Action Controls Bar */}
-            <div className="flex items-center justify-between px-6 pt-3 pb-1">
+            <div className="flex items-center justify-between px-3 sm:px-6 pt-3 pb-1">
               <div className="w-12 h-12 flex items-center justify-center">
                 {callState === 'active' ? (
                   <button 
                     onClick={toggleMute}
-                    className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all active:scale-90 ${
+                    className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all active:scale-90 touch-manipulation ${
                       isMuted 
                         ? 'bg-red-950/40 border-red-900/60 text-red-400 hover:bg-red-900/30' 
                         : 'bg-zinc-900 border-zinc-850 text-zinc-300 hover:bg-zinc-850 hover:text-white'
@@ -3520,7 +3597,7 @@ export default function Dialer({
                     <button 
                       type="button"
                       onClick={() => openChatWithNumber(phoneNumber)}
-                      className="w-11 h-11 rounded-full bg-emerald-500/15 hover:bg-emerald-500 hover:text-black border border-emerald-500/30 flex items-center justify-center text-emerald-400 hover:scale-105 active:scale-95 transition-all duration-200 shadow-sm cursor-pointer"
+                      className="w-11 h-11 rounded-full bg-emerald-500/15 hover:bg-emerald-500 hover:text-black border border-emerald-500/30 flex items-center justify-center text-emerald-400 hover:scale-105 active:scale-95 transition-all duration-200 shadow-sm cursor-pointer touch-manipulation"
                       title="Select this number to chat"
                     >
                       <MessageSquare size={17} />
@@ -3534,7 +3611,7 @@ export default function Dialer({
                   <button
                     onClick={handleCall}
                     disabled={!phoneNumber || sipState !== 'connected'}
-                    className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(16,185,129,0.3)] hover:shadow-[0_4px_25px_rgba(16,185,129,0.45)] disabled:bg-zinc-900 disabled:text-zinc-700 disabled:shadow-none disabled:cursor-not-allowed select-none border border-transparent"
+                    className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(16,185,129,0.3)] hover:shadow-[0_4px_25px_rgba(16,185,129,0.45)] disabled:bg-zinc-900 disabled:text-zinc-700 disabled:shadow-none disabled:cursor-not-allowed select-none border border-transparent touch-manipulation"
                     title="Call"
                   >
                     <Phone size={24} fill="currentColor" />
@@ -3546,14 +3623,14 @@ export default function Dialer({
                     <div className="flex gap-3 items-center">
                       <button
                         onClick={handleReject}
-                        className="w-12 h-12 rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-md"
+                        className="w-12 h-12 rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-md touch-manipulation"
                         title="Decline"
                       >
                         <PhoneOff size={20} />
                       </button>
                       <button
                         onClick={handleAnswer}
-                        className="w-12 h-12 rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-md animate-bounce"
+                        className="w-12 h-12 rounded-full flex items-center justify-center bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 transition-all duration-200 shadow-md animate-bounce touch-manipulation"
                         title="Accept"
                       >
                         <Phone size={20} fill="currentColor" />
@@ -3562,7 +3639,7 @@ export default function Dialer({
                   ) : (
                     <button
                       onClick={handleHangup}
-                      className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.35)]"
+                      className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.35)] touch-manipulation"
                       title="Hang Up"
                     >
                       <PhoneOff size={24} />
@@ -3573,7 +3650,7 @@ export default function Dialer({
                 {callState === 'dialing' && (
                   <button
                     onClick={handleHangup}
-                    className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.35)]"
+                    className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.35)] touch-manipulation"
                     title="Cancel Call"
                   >
                     <PhoneOff size={24} />
@@ -3583,7 +3660,7 @@ export default function Dialer({
                 {callState === 'active' && (
                   <button
                     onClick={handleHangup}
-                    className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.35)]"
+                    className="w-16 h-16 sm:w-[4.25rem] sm:h-[4.25rem] rounded-full flex items-center justify-center bg-red-500 text-white hover:bg-red-400 active:scale-95 transition-all duration-200 shadow-[0_4px_20px_rgba(239,68,68,0.35)] touch-manipulation"
                     title="End Call"
                   >
                     <PhoneOff size={24} />
@@ -3596,7 +3673,7 @@ export default function Dialer({
                   phoneNumber && (
                     <button 
                       onClick={handleBackspace}
-                      className="w-11 h-11 rounded-full bg-zinc-950 hover:bg-zinc-900 border border-zinc-900 flex items-center justify-center text-zinc-500 hover:text-zinc-200 transition-all"
+                      className="w-11 h-11 rounded-full bg-zinc-950 hover:bg-zinc-900 border border-zinc-900 flex items-center justify-center text-zinc-500 hover:text-zinc-200 transition-all touch-manipulation"
                       title="Backspace"
                     >
                       <Delete size={17} />
@@ -3610,7 +3687,7 @@ export default function Dialer({
                       togglePlaySound(3);
                     }}
                     disabled={!soundFiles[3] || vmDropping}
-                    className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all active:scale-90 ${
+                    className={`w-11 h-11 rounded-full border flex items-center justify-center transition-all active:scale-90 touch-manipulation ${
                       vmDropping
                         ? 'bg-amber-500 text-black animate-pulse border-amber-400'
                         : soundFiles[3]
@@ -3630,7 +3707,9 @@ export default function Dialer({
       </div>
 
       {/* SMS PANEL (RIGHT) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-6 flex flex-col min-h-[540px] h-full justify-between overflow-hidden relative">
+      <div className={`w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-2xl sm:rounded-[2rem] p-3.5 sm:p-6 flex-col min-h-[480px] sm:min-h-[540px] h-full justify-between overflow-hidden relative ${
+        mobileTab === 'sms' ? 'flex' : 'hidden lg:flex'
+      }`}>
         <div className="flex flex-col h-full flex-grow min-h-0">
           {smsView === 'inbox' ? (
             /* ===== INBOX VIEW (Threads List) ===== */
@@ -3979,6 +4058,7 @@ export default function Dialer({
             </div>
           )}
         </div>
+      </div>
       </div>
 
       {/* Dynamic native audio output for remote voice */}

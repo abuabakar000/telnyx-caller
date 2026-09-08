@@ -30,20 +30,20 @@ export default function Navbar() {
   ];
 
   return (
-    <header className="w-full max-w-[1400px] mx-auto px-4 pt-4 select-none z-20">
-      <div className="bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-2xl px-6 py-4 flex items-center justify-between gap-4">
+    <header className="w-full max-w-[1400px] mx-auto px-2 sm:px-4 pt-2 sm:pt-4 select-none z-20">
+      <div className="bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-2xl px-3.5 sm:px-6 py-2.5 sm:py-4 flex items-center justify-between gap-2 sm:gap-4">
         {/* Logo / Branding */}
-        <div className="flex items-center gap-2.5">
-          <div className="p-2 rounded-xl bg-[#00c896]/10 border border-[#00c896]/20 text-[#00c896]">
-            <PhoneCall size={18} />
+        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          <div className="p-1.5 sm:p-2 rounded-xl bg-[#00c896]/10 border border-[#00c896]/20 text-[#00c896]">
+            <PhoneCall size={16} className="sm:w-[18px] sm:h-[18px]" />
           </div>
-          <span className="text-sm font-bold tracking-widest text-zinc-100 uppercase">
-            Inex Labs Suite
+          <span className="text-xs sm:text-sm font-bold tracking-wider sm:tracking-widest text-zinc-100 uppercase">
+            Inex Labs
           </span>
         </div>
 
         {/* Navigation Links */}
-        <nav className="flex items-center gap-2">
+        <nav className="flex items-center gap-1 sm:gap-2">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
@@ -52,14 +52,15 @@ export default function Navbar() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all duration-200 ${
+                className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-bold uppercase tracking-wider transition-all duration-200 ${
                   isActive
                     ? 'bg-zinc-900 border border-zinc-800 text-[#00c896] shadow-sm shadow-[#00c896]/5'
                     : 'text-zinc-400 hover:text-zinc-200 border border-transparent hover:bg-zinc-900/50'
                 }`}
               >
-                <Icon size={14} />
-                <span>{item.label}</span>
+                <Icon size={13} className="sm:w-[14px] sm:h-[14px]" />
+                <span className="hidden sm:inline">{item.label}</span>
+                <span className="sm:hidden">{item.label === 'Phone Dialer' ? 'Dialer' : 'SMS'}</span>
               </Link>
             );
           })}

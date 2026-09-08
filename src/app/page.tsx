@@ -247,7 +247,7 @@ export default function Home() {
   ];
 
   return (
-    <div className="min-h-screen bg-black text-zinc-100 flex flex-col items-center gap-4 p-2 sm:p-4 relative selection:bg-zinc-800">
+    <div className="min-h-screen bg-black text-zinc-100 flex flex-col items-center gap-2.5 sm:gap-4 p-1.5 sm:p-4 relative selection:bg-zinc-800">
       <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(24,24,27,0.4)_0%,transparent_100%)] pointer-events-none" />
 
       {/* Navbar */}
@@ -255,16 +255,16 @@ export default function Home() {
 
       {/* ─── Dashboard Stats Bar ───────────────────────────────── */}
       <div className="z-10 w-full max-w-[1400px]">
-        <div className="bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 rounded-2xl px-6 py-3.5 flex items-center gap-6">
+        <div className="bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 rounded-2xl px-3.5 py-2.5 sm:px-6 sm:py-3.5 flex items-center gap-4 sm:gap-6 overflow-x-auto">
           {STAT_ITEMS.map((stat) => {
             const Icon = stat.icon;
             return (
-              <div key={stat.label} className="flex items-center gap-2.5 flex-1">
+              <div key={stat.label} className="flex items-center gap-2.5 shrink-0 sm:flex-1">
                 <div className="p-2 rounded-xl bg-zinc-900/70 border border-zinc-900 shrink-0">
                   <Icon size={14} className="text-zinc-400" />
                 </div>
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 leading-none">{stat.label}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 leading-none whitespace-nowrap">{stat.label}</p>
                   <p className={`text-base font-bold font-mono mt-1 ${stat.color}`}>{stat.value}</p>
                 </div>
               </div>
