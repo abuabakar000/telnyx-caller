@@ -403,6 +403,8 @@ export default function Dialer({
   const [availableNumbers, setAvailableNumbers] = useState<string[]>([]);
   const [newNumberInput, setNewNumberInput] = useState('');
   const [showNumberDropdown, setShowNumberDropdown] = useState(false);
+  const [showChatLineDropdown, setShowChatLineDropdown] = useState(false);
+  const [showInboxLineDropdown, setShowInboxLineDropdown] = useState(false);
   const [confirmDeleteNumber, setConfirmDeleteNumber] = useState<string | null>(null);
   const telnyxNumberRef = useRef('');
 
@@ -1110,6 +1112,7 @@ export default function Dialer({
 
     // Retrieve public caller ID number & load saved lines
     const defaultOutboundNumber = process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
+    const tollFreeNumber = process.env.TELNYX_PHONE_NUMBER || '+18667774939';
     let savedNumbers: string[] = [];
     try {
       const stored = localStorage.getItem('telnyx_saved_numbers');
@@ -1120,7 +1123,7 @@ export default function Dialer({
     } catch (e) {
       console.error('Failed to parse saved numbers:', e);
     }
-    const combined = Array.from(new Set([defaultOutboundNumber, ...savedNumbers].filter(Boolean)));
+    const combined = Array.from(new Set([defaultOutboundNumber, tollFreeNumber, ...savedNumbers].filter(Boolean)));
     setAvailableNumbers(combined);
 
     const activeStored = localStorage.getItem('telnyx_active_number');
@@ -3727,6 +3730,50 @@ export default function Dialer({
                         {totalUnreadSms}
                       </span>
                     )}
+                    {availableNumbers.length > 1 && (
+                      <div className="relative inline-block ml-1">
+                        <button
+                          type="button"
+                          onClick={() => setShowInboxLineDropdown(v => !v)}
+                          className="flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
+                          title="Switch inbox line"
+                        >
+                          <span>{formatPhoneNumber(telnyxNumber || '')}</span>
+                          <ChevronDown size={10} />
+                        </button>
+
+                        {showInboxLineDropdown && (
+                          <>
+                            <div className="fixed inset-0 z-40" onClick={() => setShowInboxLineDropdown(false)} />
+                            <div className="absolute top-full mt-1.5 left-0 z-50 min-w-[210px] p-1.5 rounded-xl bg-[#09090b] border border-zinc-850 shadow-2xl space-y-1">
+                              <div className="px-2 py-0.5 text-[8px] uppercase font-bold text-zinc-500 tracking-wider">
+                                Switch Inbox Line:
+                              </div>
+                              {availableNumbers.map((num) => (
+                                <button
+                                  key={num}
+                                  type="button"
+                                  onClick={() => {
+                                    switchActiveNumber(num);
+                                    setShowInboxLineDropdown(false);
+                                  }}
+                                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-mono text-left cursor-pointer ${
+                                    telnyxNumber === num
+                                      ? 'bg-emerald-500/15 text-emerald-300 font-bold border border-emerald-500/25'
+                                      : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
+                                  }`}
+                                >
+                                  <span>{formatPhoneNumber(num)}</span>
+                                  {telnyxNumber === num && (
+                                    <span className="text-[8px] uppercase tracking-wider text-emerald-400 font-sans font-bold">Active</span>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -3937,13 +3984,63 @@ export default function Dialer({
                     )}
                   </button>
 
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 relative">
                     <h3 className="text-xs font-bold text-zinc-200 truncate">
                       {activeSmsContact?.name || activeSmsContact?.phoneNumber}
                     </h3>
-                    <p className="text-[10px] font-mono text-zinc-500 truncate">
-                      {activeSmsContact?.phoneNumber} • <span className="text-emerald-400">via {telnyxNumber || 'line'}</span>
-                    </p>
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      <span className="text-[10px] font-mono text-zinc-500 truncate">
+                        {activeSmsContact?.phoneNumber} •
+                      </span>
+                      {availableNumbers.length > 1 ? (
+                        <div className="relative inline-block">
+                          <button
+                            type="button"
+                            onClick={() => setShowChatLineDropdown(v => !v)}
+                            className="text-[10px] font-mono text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 cursor-pointer"
+                            title="Click to switch sending line"
+                          >
+                            <span>via {formatPhoneNumber(telnyxNumber || '')}</span>
+                            <ChevronDown size={10} />
+                          </button>
+
+                          {showChatLineDropdown && (
+                            <>
+                              <div className="fixed inset-0 z-40" onClick={() => setShowChatLineDropdown(false)} />
+                              <div className="absolute top-full mt-1.5 left-0 z-50 min-w-[210px] p-1.5 rounded-xl bg-[#09090b] border border-zinc-850 shadow-2xl space-y-1">
+                                <div className="px-2 py-0.5 text-[8px] uppercase font-bold text-zinc-500 tracking-wider">
+                                  Send From Line:
+                                </div>
+                                {availableNumbers.map((num) => (
+                                  <button
+                                    key={num}
+                                    type="button"
+                                    onClick={() => {
+                                      switchActiveNumber(num);
+                                      setShowChatLineDropdown(false);
+                                    }}
+                                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-mono text-left cursor-pointer ${
+                                      telnyxNumber === num
+                                        ? 'bg-emerald-500/15 text-emerald-300 font-bold border border-emerald-500/25'
+                                        : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
+                                    }`}
+                                  >
+                                    <span>{formatPhoneNumber(num)}</span>
+                                    {telnyxNumber === num && (
+                                      <span className="text-[8px] uppercase tracking-wider text-emerald-400 font-sans font-bold">Active</span>
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-[10px] font-mono text-emerald-400">
+                          via {formatPhoneNumber(telnyxNumber || '')}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
