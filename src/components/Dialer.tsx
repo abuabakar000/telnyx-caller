@@ -1556,6 +1556,11 @@ export default function Dialer({
         return;
       }
 
+      // Play subtle chime for inbound SMS
+      if (data.direction === 'inbound') {
+        audioService.playSmsChime();
+      }
+
       // If viewing active chat with this contact, append to message feed
       if (activeSmsContactRef.current) {
         const contactVariants = getPhoneVariants(activeSmsContactRef.current.phoneNumber);
@@ -2395,6 +2400,8 @@ export default function Dialer({
     const lastMsg = (thread.lastMessage?.text || '').toLowerCase();
     return name.includes(q) || phone.includes(q) || lastMsg.includes(q);
   });
+
+  const totalUnreadSms = smsThreads.reduce((sum, t) => sum + (t.unreadCount || 0), 0);
 
   const filteredContacts = contacts.filter((c) => {
     if (!contactsSearch.trim()) return true;
@@ -3623,7 +3630,14 @@ export default function Dialer({
                   <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400">
                     <MessageSquare size={16} />
                   </div>
-                  <h2 className="text-xs font-bold tracking-wider uppercase text-zinc-200">SMS Inbox</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xs font-bold tracking-wider uppercase text-zinc-200">SMS Inbox</h2>
+                    {totalUnreadSms > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500 text-black leading-none shadow-sm animate-in fade-in zoom-in-95">
+                        {totalUnreadSms}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* New Chat Toggle Button */}
@@ -3821,11 +3835,16 @@ export default function Dialer({
                       setActiveSmsContact(null);
                       loadThreadsForLine(telnyxNumberRef.current);
                     }}
-                    className="p-1.5 rounded-xl bg-zinc-900 border border-zinc-850 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all shrink-0 flex items-center gap-1 text-xs"
+                    className="p-1.5 px-2.5 rounded-xl bg-zinc-900 border border-zinc-850 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all shrink-0 flex items-center gap-1.5 text-xs cursor-pointer"
                     title="Back to Inbox"
                   >
                     <ArrowLeft size={14} />
                     <span className="font-semibold">Inbox</span>
+                    {totalUnreadSms > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500 text-black leading-none ml-0.5">
+                        {totalUnreadSms}
+                      </span>
+                    )}
                   </button>
 
                   <div className="min-w-0 flex-1">

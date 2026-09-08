@@ -254,6 +254,38 @@ class AudioService {
       playTone(300, 0.3, 0.2);
     } catch (e) {}
   }
+
+  // Play subtle SMS message chime (gentle ascending two-tone)
+  playSmsChime() {
+    const ctx = this.initCtx();
+    if (!ctx) return;
+
+    try {
+      const now = ctx.currentTime;
+      const playChimeNote = (freq: number, startDelay: number, duration: number) => {
+        const t = now + startDelay;
+        const gainNode = ctx.createGain();
+        gainNode.gain.setValueAtTime(0, t);
+        gainNode.gain.linearRampToValueAtTime(0.09, t + 0.015);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+        gainNode.connect(ctx.destination);
+
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, t);
+        osc.connect(gainNode);
+
+        osc.start(t);
+        osc.stop(t + duration);
+      };
+
+      // Gentle modern messenger two-tone (587.33Hz D5 -> 880Hz A5)
+      playChimeNote(587.33, 0, 0.18);
+      playChimeNote(880.00, 0.12, 0.28);
+    } catch (e) {
+      console.warn('SMS chime failed to play:', e);
+    }
+  }
 }
 
 export const audioService = new AudioService();
