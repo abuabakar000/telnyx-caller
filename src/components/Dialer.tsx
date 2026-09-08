@@ -38,7 +38,8 @@ import {
   User,
   UserPlus,
   Users,
-  Edit2
+  Edit2,
+  Copy
 } from 'lucide-react';
 import { audioService } from '@/utils/audio';
 import { sendSMS, getMessagesByPhone, getThreads } from '@/app/actions/sms';
@@ -535,6 +536,46 @@ export default function Dialer({
     } catch (err) {
       console.error('Failed to delete contact:', err);
     }
+  };
+
+  const [callContextMenu, setCallContextMenu] = useState<{ x: number; y: number; log: CallLog } | null>(null);
+  const [copiedNumber, setCopiedNumber] = useState<string | null>(null);
+
+  const deleteCallLog = (logId: string) => {
+    const currentLine = telnyxNumberRef.current || telnyxNumber;
+    setCallHistory(prev => {
+      const updated = prev.filter(l => l.id !== logId);
+      saveHistoryForNumber(currentLine, updated);
+      return updated;
+    });
+  };
+
+  const deleteAllCallsForNumber = (num: string) => {
+    const currentLine = telnyxNumberRef.current || telnyxNumber;
+    setCallHistory(prev => {
+      const updated = prev.filter(l => l.number !== num);
+      saveHistoryForNumber(currentLine, updated);
+      return updated;
+    });
+  };
+
+  const handleCallContextMenu = (e: React.MouseEvent, log: CallLog) => {
+    e.preventDefault();
+    const menuWidth = 220;
+    const menuHeight = 250;
+    let x = e.clientX;
+    let y = e.clientY;
+
+    if (typeof window !== 'undefined') {
+      if (x + menuWidth > window.innerWidth) {
+        x = window.innerWidth - menuWidth - 10;
+      }
+      if (y + menuHeight > window.innerHeight) {
+        y = window.innerHeight - menuHeight - 10;
+      }
+    }
+
+    setCallContextMenu({ x, y, log });
   };
 
   // SMS Inbox & Chat State
@@ -2406,16 +2447,7 @@ export default function Dialer({
             </button>
           </div>
 
-          {leftPanelTab === 'recents' ? (
-            callHistory.length > 0 && (
-              <button 
-                onClick={clearHistory}
-                className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-red-400 transition-colors uppercase font-bold"
-              >
-                <Trash2 size={13} /> Clear
-              </button>
-            )
-          ) : (
+          {leftPanelTab === 'contacts' && (
             <button
               type="button"
               onClick={() => handleOpenSaveContactModal('', '')}
@@ -2489,11 +2521,13 @@ export default function Dialer({
                   return (
                     <div 
                       key={log.id} 
-                      className={`flex items-center justify-between p-3 rounded-2xl transition-all duration-200 group border ${
+                      onContextMenu={(e) => handleCallContextMenu(e, log)}
+                      className={`flex items-center justify-between p-3 rounded-2xl transition-all duration-200 group border cursor-pointer ${
                         isMissed 
                           ? 'bg-rose-950/10 border-rose-900/30 hover:bg-rose-950/25 hover:border-rose-800/40' 
                           : 'bg-zinc-900/25 border-zinc-900/80 hover:bg-zinc-900/60 hover:border-zinc-800'
                       }`}
+                      title="Right-click for options"
                     >
                       {/* Left: Direction Icon + Number & Timestamp */}
                       <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
@@ -2775,16 +2809,18 @@ export default function Dialer({
                   <button
                     type="button"
                     onClick={() => setShowNumberDropdown((v) => !v)}
-                    className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-zinc-900/90 border border-zinc-800 hover:border-zinc-700 text-zinc-100 hover:text-emerald-400 font-mono text-sm sm:text-base font-bold tracking-tight transition-all cursor-pointer shadow-sm group"
-                    title="Click to switch line"
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900/80 hover:bg-zinc-850 border border-zinc-800 hover:border-emerald-500/40 text-zinc-100 hover:text-white font-mono text-xs sm:text-sm font-semibold tracking-wider transition-all cursor-pointer shadow-sm group"
+                    title="Click to switch active line"
                   >
-                    <span>{telnyxNumber}</span>
-                    <ChevronDown size={14} className="text-zinc-500 group-hover:text-emerald-400 transition-colors" />
+                    <Phone size={11} className="text-emerald-400 shrink-0" />
+                    <span>{formatPhoneNumber(telnyxNumber)}</span>
+                    <ChevronDown size={13} className="text-zinc-500 group-hover:text-emerald-400 transition-transform duration-200" />
                   </button>
                 ) : (
-                  <span className="px-3 py-1 rounded-lg bg-zinc-900/90 border border-zinc-800/80 text-zinc-100 font-mono text-sm sm:text-base font-bold tracking-tight shadow-sm">
-                    {telnyxNumber}
-                  </span>
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900/80 border border-zinc-800/80 text-zinc-100 font-mono text-xs sm:text-sm font-semibold tracking-wider shadow-sm">
+                    <Phone size={11} className="text-emerald-400 shrink-0" />
+                    <span>{formatPhoneNumber(telnyxNumber)}</span>
+                  </div>
                 )}
 
                 {/* Dropdown when multiple numbers exist */}
@@ -2794,8 +2830,8 @@ export default function Dialer({
                       className="fixed inset-0 z-40" 
                       onClick={() => setShowNumberDropdown(false)} 
                     />
-                    <div className="absolute top-full mt-2 left-0 z-50 min-w-[220px] p-1.5 rounded-xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-1">
-                      <div className="px-2 py-1 text-[9px] uppercase font-bold text-zinc-500 tracking-wider">
+                    <div className="absolute top-full mt-2 left-0 z-50 min-w-[240px] p-1.5 rounded-2xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-1">
+                      <div className="px-2.5 py-1 text-[9px] uppercase font-bold text-zinc-500 tracking-wider">
                         Switch Active Line
                       </div>
                       {availableNumbers.map((num) => (
@@ -2806,13 +2842,13 @@ export default function Dialer({
                             switchActiveNumber(num);
                             setShowNumberDropdown(false);
                           }}
-                          className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-mono transition-all text-left ${
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-mono transition-all text-left ${
                             telnyxNumber === num
                               ? 'bg-emerald-500/15 text-emerald-300 font-bold border border-emerald-500/25'
                               : 'text-zinc-400 hover:text-white hover:bg-zinc-900 border border-transparent'
                           }`}
                         >
-                          <span>{num}</span>
+                          <span>{formatPhoneNumber(num)}</span>
                           {telnyxNumber === num && (
                             <span className="text-[9px] uppercase tracking-wider text-emerald-400 bg-emerald-500/20 px-1.5 py-0.5 rounded font-sans font-bold">
                               Active
@@ -3352,37 +3388,18 @@ export default function Dialer({
                   className="w-full bg-transparent border-none outline-none text-center text-3xl sm:text-4xl font-bold font-mono text-zinc-100 placeholder-zinc-800 tracking-wide select-all focus:ring-0 focus:outline-none"
                 />
 
-                {/* Quick Chat Pill & Save Contact Button when number is typed */}
-                {callState === 'idle' && phoneNumber.trim().length >= 7 && (
-                  <div className="flex items-center justify-center gap-2 mt-1 mb-1 animate-in fade-in duration-150 flex-wrap">
-                    {(() => {
-                      const matched = findContactByPhone(phoneNumber);
-                      return (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => openChatWithNumber(phoneNumber, matched?.name, matched?.id)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-black border border-emerald-500/25 hover:border-emerald-500 text-xs font-semibold transition-all duration-150 shadow-sm cursor-pointer"
-                            title={`Select ${matched ? matched.name : formatPhoneNumber(phoneNumber)} to chat`}
-                          >
-                            <MessageSquare size={12} />
-                            <span>Chat with {matched ? matched.name : formatPhoneNumber(phoneNumber)}</span>
-                          </button>
-
-                          {!matched && (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenSaveContactModal(phoneNumber, '')}
-                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 hover:border-zinc-700 text-xs font-semibold transition-all duration-150 shadow-sm cursor-pointer"
-                              title="Save this number to Contacts"
-                            >
-                              <UserPlus size={12} className="text-emerald-400" />
-                              <span>Save Contact</span>
-                            </button>
-                          )}
-                        </>
-                      );
-                    })()}
+                {/* Save Contact Button when number is typed and unsaved */}
+                {callState === 'idle' && phoneNumber.trim().length >= 7 && !findContactByPhone(phoneNumber) && (
+                  <div className="flex items-center justify-center gap-2 mt-1 mb-1 animate-in fade-in duration-150">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenSaveContactModal(phoneNumber, '')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 hover:border-zinc-700 text-xs font-semibold transition-all duration-150 shadow-sm cursor-pointer"
+                      title="Save this number to Contacts"
+                    >
+                      <UserPlus size={12} className="text-emerald-400" />
+                      <span>Save Contact</span>
+                    </button>
                   </div>
                 )}
               </div>
@@ -3936,6 +3953,123 @@ export default function Dialer({
 
       {/* Dynamic native audio output for remote voice */}
       <audio ref={audioRef} id="remote-audio" autoPlay className="hidden" />
+
+      {/* RIGHT CLICK CONTEXT MENU FOR CALL HISTORY */}
+      {callContextMenu && (() => {
+        const matchedContact = findContactByPhone(callContextMenu.log.number);
+        const displayName = matchedContact?.name || callContextMenu.log.name;
+        const formattedNum = formatPhoneNumber(callContextMenu.log.number);
+
+        return (
+          <>
+            <div 
+              className="fixed inset-0 z-50 cursor-default" 
+              onClick={() => setCallContextMenu(null)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setCallContextMenu(null);
+              }}
+            />
+
+            <div 
+              style={{ top: callContextMenu.y, left: callContextMenu.x }}
+              className="fixed z-50 min-w-[210px] bg-zinc-950/95 backdrop-blur-xl border border-zinc-800 rounded-2xl shadow-2xl p-1.5 space-y-1 animate-in fade-in zoom-in-95 duration-100 select-none text-xs"
+            >
+              <div className="px-3 py-2 border-b border-zinc-900 mb-1">
+                <p className="font-bold text-zinc-100 truncate">{displayName || formattedNum}</p>
+                {displayName && (
+                  <p className="font-mono text-[10px] text-zinc-500 truncate mt-0.5">{formattedNum}</p>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPhoneNumber(callContextMenu.log.number);
+                  setCallContextMenu(null);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-zinc-300 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer text-left"
+              >
+                <Phone size={13} className="text-emerald-400" />
+                <span>Call Number</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  openChatWithNumber(callContextMenu.log.number, displayName);
+                  setCallContextMenu(null);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-zinc-300 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer text-left"
+              >
+                <MessageSquare size={13} className="text-emerald-400" />
+                <span>Send SMS</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  handleOpenSaveContactModal(callContextMenu.log.number, displayName || '', matchedContact?.id);
+                  setCallContextMenu(null);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-zinc-300 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer text-left"
+              >
+                {matchedContact ? (
+                  <>
+                    <Edit2 size={13} className="text-blue-400" />
+                    <span>Edit Contact</span>
+                  </>
+                ) : (
+                  <>
+                    <UserPlus size={13} className="text-emerald-400" />
+                    <span>Save Contact</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(callContextMenu.log.number);
+                  setCopiedNumber(callContextMenu.log.number);
+                  setTimeout(() => setCopiedNumber(null), 1500);
+                  setCallContextMenu(null);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-zinc-300 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer text-left"
+              >
+                <Copy size={13} className="text-zinc-400" />
+                <span>{copiedNumber === callContextMenu.log.number ? 'Copied!' : 'Copy Number'}</span>
+              </button>
+
+              <div className="border-t border-zinc-900 my-1" />
+
+              <button
+                type="button"
+                onClick={() => {
+                  deleteCallLog(callContextMenu.log.id);
+                  setCallContextMenu(null);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 transition-colors cursor-pointer text-left"
+              >
+                <Trash2 size={13} />
+                <span>Delete from History</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  deleteAllCallsForNumber(callContextMenu.log.number);
+                  setCallContextMenu(null);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-rose-400/80 hover:text-rose-300 hover:bg-rose-500/10 transition-colors cursor-pointer text-left text-[11px]"
+              >
+                <Trash2 size={12} />
+                <span>Delete All for Number</span>
+              </button>
+            </div>
+          </>
+        );
+      })()}
 
       {/* SAVE / EDIT CONTACT MODAL */}
       {showContactModal && (
