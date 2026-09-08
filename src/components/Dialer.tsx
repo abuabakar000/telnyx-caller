@@ -39,7 +39,8 @@ import {
   UserPlus,
   Users,
   Edit2,
-  Copy
+  Copy,
+  Wrench
 } from 'lucide-react';
 import { audioService } from '@/utils/audio';
 import { sendSMS, getMessagesByPhone, getThreads } from '@/app/actions/sms';
@@ -407,7 +408,38 @@ export default function Dialer({
     return defaultDallas;
   });
   const [telnyxSmsNumber, setTelnyxSmsNumber] = useState<string>(defaultTollFree);
-  const [availableNumbers, setAvailableNumbers] = useState<string[]>([defaultDallas, defaultTollFree]);
+  const [availableNumbers, setAvailableNumbers] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('telnyx_saved_numbers');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [defaultDallas, defaultTollFree];
+  });
+  const [numberLabels, setNumberLabels] = useState<Record<string, string>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('telnyx_number_labels');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && typeof parsed === 'object') return parsed;
+        }
+      } catch (e) {}
+    }
+    return {
+      [defaultDallas]: 'Dallas',
+      [defaultTollFree]: 'Toll-Free',
+    };
+  });
+  const [showLineManagerModal, setShowLineManagerModal] = useState(false);
+  const [newLinePhone, setNewLinePhone] = useState('');
+  const [newLineLabel, setNewLineLabel] = useState('');
+  const [editingLineNumber, setEditingLineNumber] = useState<string | null>(null);
+  const [editingLineLabel, setEditingLineLabel] = useState('');
   const [newNumberInput, setNewNumberInput] = useState('');
   const [showNumberDropdown, setShowNumberDropdown] = useState(false);
   const [showChatLineDropdown, setShowChatLineDropdown] = useState(false);
@@ -701,30 +733,117 @@ export default function Dialer({
     setShowNumberDropdown(false);
   };
 
-  const handleAddNumber = (numToAdd: string) => {
-    const trimmed = numToAdd.trim();
-    if (!trimmed) return;
-    if (!availableNumbers.includes(trimmed)) {
-      const updatedList = [...availableNumbers, trimmed];
+  const getLineLabel = useCallback((num?: string): string => {
+    if (!num) return 'Line';
+    if (numberLabels[num] && numberLabels[num].trim()) {
+      return numberLabels[num].trim();
+    }
+    const digits = num.replace(/\D/g, '');
+    if (digits.includes('214') || digits.includes('469') || digits.includes('972')) return 'Dallas';
+    if (
+      digits.startsWith('1800') || digits.startsWith('1888') || digits.startsWith('1877') || digits.startsWith('1866') ||
+      digits.startsWith('1855') || digits.startsWith('1844') || digits.startsWith('1833') ||
+      digits.startsWith('800') || digits.startsWith('888') || digits.startsWith('877') || digits.startsWith('866') ||
+      digits.startsWith('855') || digits.startsWith('844') || digits.startsWith('833')
+    ) {
+      return 'Toll-Free';
+    }
+    return 'Line';
+  }, [numberLabels]);
+
+  const handleAddLineSubmit = (phoneToAdd: string, customLabel?: string) => {
+    const raw = phoneToAdd.trim();
+    if (!raw) return;
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length < 10) {
+      alert('Please enter a valid phone number with at least 10 digits.');
+      return;
+    }
+    const normalized = normalizePhone(raw);
+    if (!availableNumbers.includes(normalized)) {
+      const updatedList = [...availableNumbers, normalized];
       setAvailableNumbers(updatedList);
+      
+      const labelToUse = (customLabel && customLabel.trim()) ? customLabel.trim() : getLineLabel(normalized);
+      const updatedLabels = { ...numberLabels, [normalized]: labelToUse };
+      setNumberLabels(updatedLabels);
+
       if (typeof window !== 'undefined') {
         localStorage.setItem('telnyx_saved_numbers', JSON.stringify(updatedList));
+        localStorage.setItem('telnyx_number_labels', JSON.stringify(updatedLabels));
+        window.dispatchEvent(new Event('telnyx_numbers_updated'));
       }
-      switchActiveNumber(trimmed);
-      setNewNumberInput('');
+      switchActiveNumber(normalized);
     }
+    setNewLinePhone('');
+    setNewLineLabel('');
+    setNewNumberInput('');
+  };
+
+  const handleSaveEditedLabel = (num: string, newLabel: string) => {
+    const trimmed = newLabel.trim();
+    const updatedLabels = { ...numberLabels, [num]: trimmed || getLineLabel(num) };
+    setNumberLabels(updatedLabels);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('telnyx_number_labels', JSON.stringify(updatedLabels));
+      window.dispatchEvent(new Event('telnyx_numbers_updated'));
+    }
+    setEditingLineNumber(null);
+    setEditingLineLabel('');
+  };
+
+  const handleAddNumber = (numToAdd: string) => {
+    handleAddLineSubmit(numToAdd);
   };
 
   const handleRemoveNumber = (numToRemove: string) => {
+    if (availableNumbers.length <= 1) {
+      alert('You must keep at least one active phone line.');
+      return;
+    }
     const updatedList = availableNumbers.filter((n) => n !== numToRemove);
     setAvailableNumbers(updatedList);
+    const updatedLabels = { ...numberLabels };
+    delete updatedLabels[numToRemove];
+    setNumberLabels(updatedLabels);
+
     if (typeof window !== 'undefined') {
       localStorage.setItem('telnyx_saved_numbers', JSON.stringify(updatedList));
+      localStorage.setItem('telnyx_number_labels', JSON.stringify(updatedLabels));
+      window.dispatchEvent(new Event('telnyx_numbers_updated'));
     }
     if (telnyxNumber === numToRemove && updatedList.length > 0) {
       switchActiveNumber(updatedList[0]);
     }
   };
+
+  // Sync numbers and labels across tabs and routes
+  useEffect(() => {
+    const handleSync = () => {
+      try {
+        const savedNums = localStorage.getItem('telnyx_saved_numbers');
+        if (savedNums) {
+          const parsed = JSON.parse(savedNums);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setAvailableNumbers(parsed);
+          }
+        }
+        const savedLabels = localStorage.getItem('telnyx_number_labels');
+        if (savedLabels) {
+          const parsed = JSON.parse(savedLabels);
+          if (parsed && typeof parsed === 'object') {
+            setNumberLabels(parsed);
+          }
+        }
+      } catch (e) {}
+    };
+    window.addEventListener('storage', handleSync);
+    window.addEventListener('telnyx_numbers_updated', handleSync);
+    return () => {
+      window.removeEventListener('storage', handleSync);
+      window.removeEventListener('telnyx_numbers_updated', handleSync);
+    };
+  }, []);
 
   // Sound Pad State — 4 slots (0-2 regular, 3 = VM Drop)
   const [soundFiles, setSoundFiles] = useState<(File | null)[]>([null, null, null, null]);
@@ -2564,12 +2683,10 @@ export default function Dialer({
         {leftPanelTab === 'recents' ? (
           <>
             {/* Prominent Line Switcher Tabs for Call History */}
-            {availableNumbers.length > 1 && (
-              <div className="flex items-center gap-1.5 mb-2.5 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800 select-none shrink-0">
+            {availableNumbers.length > 0 && (
+              <div className="flex items-center gap-1.5 mb-2.5 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800 select-none shrink-0 overflow-x-auto scrollbar-none flex-nowrap">
                 {availableNumbers.map((num) => {
-                  const isDallas = num.includes('214');
-                  const isTollFree = num.includes('866') || num.includes('800') || num.includes('888') || num.includes('877');
-                  const label = isTollFree ? 'Toll-Free' : isDallas ? 'Dallas' : 'Line';
+                  const label = getLineLabel(num);
                   const isSelected = (telnyxNumber === num);
                   const lineLogs = loadHistoryForNumber(num);
                   return (
@@ -2577,7 +2694,7 @@ export default function Dialer({
                       key={num}
                       type="button"
                       onClick={() => switchActiveNumber(num)}
-                      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      className={`shrink-0 whitespace-nowrap flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                         isSelected
                           ? 'bg-emerald-500 text-black shadow-sm'
                           : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
@@ -2586,13 +2703,22 @@ export default function Dialer({
                       <span>{label}</span>
                       <span className="text-[10px] font-mono opacity-80">({formatPhoneNumber(num)})</span>
                       {lineLogs.length > 0 && (
-                        <span className={`text-[9px] font-mono px-1 rounded-full ${isSelected ? 'bg-black/20 text-black font-bold' : 'bg-zinc-800 text-zinc-400'}`}>
+                        <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full ${isSelected ? 'bg-black/20 text-black font-bold' : 'bg-zinc-800 text-zinc-400'}`}>
                           {lineLogs.length}
                         </span>
                       )}
                     </button>
                   );
                 })}
+                <button
+                  type="button"
+                  onClick={() => setShowLineManagerModal(true)}
+                  className="p-1.5 px-2 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-emerald-400 border border-zinc-700/60 transition-colors shrink-0 flex items-center gap-1 cursor-pointer text-xs font-semibold"
+                  title="Manage Phone Lines (Spanner Tool)"
+                >
+                  <Wrench size={12} />
+                  <span className="text-[10px] hidden sm:inline">Manage</span>
+                </button>
               </div>
             )}
 
@@ -2953,24 +3079,26 @@ export default function Dialer({
                     title="Click to switch active line"
                   >
                     <Phone size={11} className="text-emerald-400 shrink-0" />
+                    <span className="font-sans text-xs text-emerald-400 font-bold mr-0.5">{getLineLabel(telnyxNumber)}</span>
                     <span>{formatPhoneNumber(telnyxNumber)}</span>
                     <ChevronDown size={13} className="text-zinc-500 group-hover:text-emerald-400 transition-transform duration-200" />
                   </button>
                 ) : (
                   <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900/80 border border-zinc-800/80 text-zinc-100 font-mono text-xs sm:text-sm font-semibold tracking-wider shadow-sm">
                     <Phone size={11} className="text-emerald-400 shrink-0" />
+                    <span className="font-sans text-xs text-emerald-400 font-bold mr-0.5">{getLineLabel(telnyxNumber)}</span>
                     <span>{formatPhoneNumber(telnyxNumber)}</span>
                   </div>
                 )}
 
                 {/* Dropdown when multiple numbers exist */}
-                {showNumberDropdown && availableNumbers.length > 1 && (
+                {showNumberDropdown && (
                   <>
                     <div 
                       className="fixed inset-0 z-30" 
                       onClick={() => setShowNumberDropdown(false)} 
                     />
-                    <div className="absolute top-full mt-2 left-0 z-50 min-w-[260px] p-2 rounded-2xl bg-[#09090b] border border-zinc-850 shadow-[0_20px_50px_rgba(0,0,0,0.9)] space-y-1">
+                    <div className="absolute top-full mt-2 left-0 z-50 min-w-[280px] p-2 rounded-2xl bg-[#09090b] border border-zinc-850 shadow-[0_20px_50px_rgba(0,0,0,0.9)] space-y-1">
                       <div className="px-2.5 py-1 text-[9px] uppercase font-bold text-zinc-500 tracking-wider">
                         Switch Active Line
                       </div>
@@ -2988,7 +3116,10 @@ export default function Dialer({
                               : 'text-zinc-400 hover:text-white hover:bg-zinc-900 border border-transparent'
                           }`}
                         >
-                          <span>{formatPhoneNumber(num)}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-sans font-bold text-zinc-300">{getLineLabel(num)}</span>
+                            <span className="text-zinc-400 text-[11px]">({formatPhoneNumber(num)})</span>
+                          </div>
                           {telnyxNumber === num && (
                             <span className="text-[9px] uppercase tracking-wider text-emerald-400 bg-emerald-500/20 px-1.5 py-0.5 rounded font-sans font-bold">
                               Active
@@ -2996,6 +3127,19 @@ export default function Dialer({
                           )}
                         </button>
                       ))}
+                      <div className="pt-1.5 mt-1 border-t border-zinc-900">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowNumberDropdown(false);
+                            setShowLineManagerModal(true);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-zinc-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition-all cursor-pointer font-sans"
+                        >
+                          <Wrench size={13} className="text-emerald-400" />
+                          <span>Manage Phone Lines (Spanner)...</span>
+                        </button>
+                      </div>
                     </div>
                   </>
                 )}
@@ -3005,6 +3149,19 @@ export default function Dialer({
 
           {/* Header Icons Container */}
           <div className="flex items-center gap-2.5 relative z-50">
+            {/* Manage Phone Lines Spanner Tool */}
+            <button 
+              type="button"
+              onClick={() => {
+                setShowNumberDropdown(false);
+                setShowLineManagerModal(true);
+              }}
+              className="p-2 rounded-full border border-zinc-900/80 bg-zinc-900/40 text-zinc-400 hover:text-emerald-400 hover:bg-zinc-800 hover:border-emerald-500/40 transition-all duration-200 cursor-pointer"
+              title="Manage Phone Lines (Spanner Tool)"
+            >
+              <Wrench size={15} />
+            </button>
+
             {/* Toggle Settings Icon */}
             <button 
               type="button"
@@ -3141,8 +3298,15 @@ export default function Dialer({
               {/* Outbound Phone Numbers (Lines) Manager */}
               <div className="p-3.5 bg-zinc-900/30 border border-zinc-900 rounded-xl space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">
-                    Outbound Phone Numbers (Lines)
+                  <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider flex items-center gap-1.5">
+                    <span>Outbound Phone Lines</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowLineManagerModal(true)}
+                      className="text-[9px] text-emerald-400 hover:underline flex items-center gap-0.5 ml-1 font-semibold normal-case"
+                    >
+                      <Wrench size={10} /> Spanner Tool
+                    </button>
                   </div>
                   <span className="text-[10px] text-zinc-500 font-mono">
                     {availableNumbers.length} {availableNumbers.length === 1 ? 'line' : 'lines'}
@@ -3163,7 +3327,8 @@ export default function Dialer({
                     >
                       <div className="flex items-center gap-2 font-mono">
                         <span className={`w-2 h-2 rounded-full ${telnyxNumber === num ? 'bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.5)]' : 'bg-zinc-700'}`} />
-                        <span>{num}</span>
+                        <span className="font-sans font-bold text-zinc-200">{getLineLabel(num)}</span>
+                        <span className="text-zinc-400">({formatPhoneNumber(num)})</span>
                         {telnyxNumber === num && (
                           <span className="text-[9px] uppercase tracking-wider text-emerald-400 bg-emerald-500/20 px-1.5 py-0.5 rounded font-sans font-bold">
                             Active
@@ -3840,19 +4005,17 @@ export default function Dialer({
               </div>
 
               {/* Dedicated Per-Number Inboxes Tab Bar */}
-              {availableNumbers.length > 1 && (
-                <div className="flex items-center gap-1.5 mt-3 mb-1 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800 shrink-0 select-none">
+              {availableNumbers.length > 0 && (
+                <div className="flex items-center gap-1.5 mt-3 mb-1 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800 shrink-0 select-none overflow-x-auto scrollbar-none flex-nowrap">
                   {availableNumbers.map((num) => {
-                    const isDallas = num.includes('214');
-                    const isTollFree = num.includes('866') || num.includes('800') || num.includes('888') || num.includes('877');
-                    const label = isTollFree ? 'Toll-Free' : isDallas ? 'Dallas' : 'Line';
+                    const label = getLineLabel(num);
                     const isSelected = (telnyxNumber === num);
                     return (
                       <button
                         key={num}
                         type="button"
                         onClick={() => switchActiveNumber(num)}
-                        className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        className={`shrink-0 whitespace-nowrap flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                           isSelected
                             ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/15'
                             : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
@@ -3868,6 +4031,15 @@ export default function Dialer({
                       </button>
                     );
                   })}
+                  <button
+                    type="button"
+                    onClick={() => setShowLineManagerModal(true)}
+                    className="p-2 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-emerald-400 border border-zinc-700/60 transition-colors shrink-0 flex items-center gap-1 cursor-pointer text-xs font-semibold"
+                    title="Manage Phone Lines (Spanner Tool)"
+                  >
+                    <Wrench size={12} />
+                    <span className="text-[10px] hidden sm:inline">Manage</span>
+                  </button>
                 </div>
               )}
 
@@ -4105,7 +4277,10 @@ export default function Dialer({
                                         : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
                                     }`}
                                   >
-                                    <span>{formatPhoneNumber(num)}</span>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="font-sans font-bold text-zinc-300">{getLineLabel(num)}</span>
+                                      <span className="text-zinc-400 text-[10px]">({formatPhoneNumber(num)})</span>
+                                    </div>
                                     {telnyxNumber === num && (
                                       <span className="text-[8px] uppercase tracking-wider text-emerald-400 font-sans font-bold">Active</span>
                                     )}
@@ -4142,21 +4317,19 @@ export default function Dialer({
               </div>
 
               {/* Active Outbound Line Selector Bar in Chat View */}
-              {availableNumbers.length > 1 && (
-                <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border border-zinc-850 rounded-xl my-2 text-xs select-none shrink-0">
-                  <span className="text-zinc-400 text-[11px] font-medium">Sending SMS as:</span>
-                  <div className="flex items-center gap-1.5">
+              {availableNumbers.length > 0 && (
+                <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border border-zinc-850 rounded-xl my-2 text-xs select-none shrink-0 overflow-x-auto scrollbar-none">
+                  <span className="text-zinc-400 text-[11px] font-medium shrink-0 mr-2">Sending SMS as:</span>
+                  <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none flex-nowrap">
                     {availableNumbers.map((num) => {
-                      const isDallas = num.includes('214');
-                      const isTollFree = num.includes('866') || num.includes('800') || num.includes('888') || num.includes('877');
-                      const label = isTollFree ? 'Toll-Free' : isDallas ? 'Dallas' : 'Line';
+                      const label = getLineLabel(num);
                       const isSelected = (telnyxNumber === num);
                       return (
                         <button
                           key={num}
                           type="button"
                           onClick={() => switchActiveNumber(num)}
-                          className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                          className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition-all ${
                             isSelected
                               ? 'bg-emerald-500 text-black font-extrabold shadow-sm'
                               : 'bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700'
@@ -4168,6 +4341,14 @@ export default function Dialer({
                         </button>
                       );
                     })}
+                    <button
+                      type="button"
+                      onClick={() => setShowLineManagerModal(true)}
+                      className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-emerald-400 border border-zinc-750 transition-colors shrink-0 cursor-pointer"
+                      title="Manage Phone Lines (Spanner Tool)"
+                    >
+                      <Wrench size={11} />
+                    </button>
                   </div>
                 </div>
               )}
@@ -4264,7 +4445,7 @@ export default function Dialer({
                   </button>
                 </div>
                 <div className="text-[9px] text-zinc-500 mt-1 text-center font-medium">
-                  Press Enter to send • Sending from {(telnyxNumber || '').includes('866') ? `Toll-Free (${formatPhoneNumber(telnyxNumber)})` : `Dallas (${formatPhoneNumber(telnyxNumber || '')})`}
+                  Press Enter to send • Sending from {getLineLabel(telnyxNumber)} ({formatPhoneNumber(telnyxNumber || '')})
                 </div>
               </form>
             </div>
@@ -4468,6 +4649,231 @@ export default function Dialer({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MANAGE PHONE LINES (SPANNER TOOL) MODAL */}
+      {showLineManagerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="w-full max-w-lg bg-zinc-950 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-5 animate-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800">
+            {/* Header */}
+            <div className="flex items-start justify-between pb-3 border-b border-zinc-900">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400 shrink-0">
+                  <Wrench size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                    Manage Phone Lines
+                    <span className="text-[10px] font-mono font-normal uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                      Spanner Tool
+                    </span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Add, nickname, and manage numbers for Outbound Calling & SMS.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLineManagerModal(false);
+                  setEditingLineNumber(null);
+                }}
+                className="p-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Add New Line Form */}
+            <div className="p-4 rounded-2xl bg-zinc-900/50 border border-zinc-850 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-zinc-200 flex items-center gap-1.5">
+                  <Plus size={13} className="text-emerald-400" />
+                  Add Future Phone Line
+                </span>
+                <span className="text-[10px] text-zinc-500">Supports US, Canada & International</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider block mb-1">
+                    Phone Number
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="+1 (555) 000-0000"
+                    value={newLinePhone}
+                    onChange={(e) => setNewLinePhone(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-emerald-500 transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider block mb-1">
+                    Line Nickname / Label
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Dallas, Sales, VIP Line"
+                    value={newLineLabel}
+                    onChange={(e) => setNewLineLabel(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-emerald-500 transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => handleAddLineSubmit(newLinePhone, newLineLabel)}
+                  disabled={!newLinePhone.trim()}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 disabled:hover:bg-emerald-500 text-black text-xs font-bold shadow-lg shadow-emerald-500/20 transition-all active:scale-95 cursor-pointer"
+                >
+                  <Plus size={13} />
+                  <span>Add Line</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Configured Lines List */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-zinc-400 uppercase tracking-wider px-1">
+                <span>Configured Lines ({availableNumbers.length})</span>
+                <span className="text-[10px] text-zinc-500 font-normal normal-case">Click to switch or rename</span>
+              </div>
+
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {availableNumbers.map((num) => {
+                  const isCurrent = telnyxNumber === num;
+                  const isEditing = editingLineNumber === num;
+                  const label = getLineLabel(num);
+
+                  return (
+                    <div
+                      key={num}
+                      className={`flex items-center justify-between p-3 rounded-2xl border transition-all ${
+                        isCurrent
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                          : 'bg-zinc-900/40 border-zinc-850 hover:border-zinc-800 text-zinc-300'
+                      }`}
+                    >
+                      {/* Left info or editing input */}
+                      <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
+                        <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isCurrent ? 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)]' : 'bg-zinc-700'}`} />
+                        
+                        {isEditing ? (
+                          <div className="flex items-center gap-2 flex-1">
+                            <input
+                              type="text"
+                              value={editingLineLabel}
+                              onChange={(e) => setEditingLineLabel(e.target.value)}
+                              placeholder="Line nickname"
+                              className="bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 w-full max-w-[140px]"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleSaveEditedLabel(num, editingLineLabel);
+                                } else if (e.key === 'Escape') {
+                                  setEditingLineNumber(null);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditedLabel(num, editingLineLabel)}
+                              className="p-1 rounded-lg bg-emerald-500 text-black hover:bg-emerald-400 cursor-pointer"
+                              title="Save nickname"
+                            >
+                              <Check size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingLineNumber(null)}
+                              className="p-1 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white cursor-pointer"
+                              title="Cancel"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-white truncate">{label}</span>
+                              {isCurrent && (
+                                <span className="text-[9px] uppercase font-bold tracking-wider bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded font-mono">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] font-mono text-zinc-400 block truncate">
+                              {formatPhoneNumber(num)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Right actions */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {!isCurrent && (
+                          <button
+                            type="button"
+                            onClick={() => switchActiveNumber(num)}
+                            className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-emerald-500 hover:text-black text-xs font-semibold text-zinc-300 transition-all cursor-pointer"
+                          >
+                            Set Active
+                          </button>
+                        )}
+                        {!isEditing && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingLineNumber(num);
+                              setEditingLineLabel(numberLabels[num] || getLineLabel(num));
+                            }}
+                            className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+                            title="Rename line nickname"
+                          >
+                            <Edit2 size={12} />
+                          </button>
+                        )}
+                        {availableNumbers.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteNumber(num)}
+                            className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 transition-colors cursor-pointer"
+                            title="Remove line"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Information Notice */}
+            <div className="p-3 rounded-xl bg-zinc-900/30 border border-zinc-850/60 text-[11px] text-zinc-400 leading-relaxed">
+              💡 <strong>Tip:</strong> All numbers added here are instantly available in your Keypad caller ID dropdown, Call History tabs, SMS Inboxes, and Chat views across both the dialer and SMS workspace.
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end pt-2 border-t border-zinc-900">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLineManagerModal(false);
+                  setEditingLineNumber(null);
+                }}
+                className="px-5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-xs font-semibold text-zinc-200 transition-all cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

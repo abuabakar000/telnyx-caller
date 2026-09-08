@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, Send, Users, FileText, Activity, Plus, Search, 
-  Download, Upload, AlertCircle, CheckCircle2, Trash, Settings, X, Clock, Phone
+  Download, Upload, AlertCircle, CheckCircle2, Trash, Settings, X, Clock, Phone,
+  Wrench, Edit2, Check, Trash2
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { sendSMS, getMessages, getThreads } from '@/app/actions/sms';
@@ -74,8 +75,40 @@ interface Template {
 const DALLAS_NUMBER = process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
 const TOLL_FREE_NUMBER = '+18667774939';
 
+const formatPhoneNumber = (num: string): string => {
+  if (/[a-zA-Z]/.test(num)) return num;
+  const cleaned = num.replace(/[^0-9*#+]/g, '');
+  if (cleaned.startsWith('+1')) {
+    const rest = cleaned.slice(2);
+    if (rest.length === 0) return '+1';
+    if (rest.length <= 3) return `+1 (${rest}`;
+    if (rest.length <= 6) return `+1 (${rest.slice(0, 3)}) ${rest.slice(3)}`;
+    return `+1 (${rest.slice(0, 3)}) ${rest.slice(3, 6)}-${rest.slice(6, 10)}`;
+  } else if (cleaned.startsWith('1')) {
+    const rest = cleaned.slice(1);
+    if (rest.length === 0) return '+1';
+    if (rest.length <= 3) return `+1 (${rest}`;
+    if (rest.length <= 6) return `+1 (${rest.slice(0, 3)}) ${rest.slice(3)}`;
+    return `+1 (${rest.slice(0, 3)}) ${rest.slice(3, 6)}-${rest.slice(6, 10)}`;
+  } else if (cleaned.length > 0 && !cleaned.startsWith('+')) {
+    if (cleaned.length <= 3) return cleaned;
+    if (cleaned.length <= 6) return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3)}`;
+    return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6, 10)}`;
+  }
+  return cleaned;
+};
+
+const normalizePhone = (raw: string): string => {
+  if (!raw) return '';
+  const digits = raw.replace(/[^0-9+]/g, '');
+  if (digits.startsWith('+')) return digits;
+  if (digits.length === 10) return '+1' + digits;
+  if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  return '+' + digits;
+};
+
 export default function SMSPage() {
-  // Active Phone Line (Dallas vs Toll-Free)
+  // Active Phone Line (Dallas vs Toll-Free vs Dynamic Lines)
   const [activeLine, setActiveLine] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('telnyx_active_number') || DALLAS_NUMBER;
@@ -87,6 +120,150 @@ export default function SMSPage() {
   useEffect(() => {
     activeLineRef.current = activeLine;
   }, [activeLine]);
+
+  // Dynamic Available Numbers & Custom Nicknames / Labels
+  const [availableNumbers, setAvailableNumbers] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('telnyx_saved_numbers');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [DALLAS_NUMBER, TOLL_FREE_NUMBER];
+  });
+
+  const [numberLabels, setNumberLabels] = useState<Record<string, string>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('telnyx_number_labels');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && typeof parsed === 'object') return parsed;
+        }
+      } catch (e) {}
+    }
+    return {
+      [DALLAS_NUMBER]: 'Dallas',
+      [TOLL_FREE_NUMBER]: 'Toll-Free',
+    };
+  });
+
+  const [showLineManagerModal, setShowLineManagerModal] = useState(false);
+  const [newLinePhone, setNewLinePhone] = useState('');
+  const [newLineLabel, setNewLineLabel] = useState('');
+  const [editingLineNumber, setEditingLineNumber] = useState<string | null>(null);
+  const [editingLineLabel, setEditingLineLabel] = useState('');
+  const [confirmDeleteNumber, setConfirmDeleteNumber] = useState<string | null>(null);
+
+  const getLineLabel = (num?: string): string => {
+    if (!num) return 'Line';
+    if (numberLabels[num] && numberLabels[num].trim()) {
+      return numberLabels[num].trim();
+    }
+    const digits = num.replace(/\D/g, '');
+    if (digits.includes('214') || digits.includes('469') || digits.includes('972')) return 'Dallas';
+    if (
+      digits.startsWith('1800') || digits.startsWith('1888') || digits.startsWith('1877') || digits.startsWith('1866') ||
+      digits.startsWith('1855') || digits.startsWith('1844') || digits.startsWith('1833') ||
+      digits.startsWith('800') || digits.startsWith('888') || digits.startsWith('877') || digits.startsWith('866') ||
+      digits.startsWith('855') || digits.startsWith('844') || digits.startsWith('833')
+    ) {
+      return 'Toll-Free';
+    }
+    return 'Line';
+  };
+
+  // Sync numbers and labels across tabs and routes
+  useEffect(() => {
+    const handleSync = () => {
+      try {
+        const savedNums = localStorage.getItem('telnyx_saved_numbers');
+        if (savedNums) {
+          const parsed = JSON.parse(savedNums);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setAvailableNumbers(parsed);
+          }
+        }
+        const savedLabels = localStorage.getItem('telnyx_number_labels');
+        if (savedLabels) {
+          const parsed = JSON.parse(savedLabels);
+          if (parsed && typeof parsed === 'object') {
+            setNumberLabels(parsed);
+          }
+        }
+      } catch (e) {}
+    };
+    window.addEventListener('storage', handleSync);
+    window.addEventListener('telnyx_numbers_updated', handleSync);
+    return () => {
+      window.removeEventListener('storage', handleSync);
+      window.removeEventListener('telnyx_numbers_updated', handleSync);
+    };
+  }, []);
+
+  const handleAddLineSubmit = (phoneToAdd: string, customLabel?: string) => {
+    const raw = phoneToAdd.trim();
+    if (!raw) return;
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length < 10) {
+      alert('Please enter a valid phone number with at least 10 digits.');
+      return;
+    }
+    const normalized = normalizePhone(raw);
+    if (!availableNumbers.includes(normalized)) {
+      const updatedList = [...availableNumbers, normalized];
+      setAvailableNumbers(updatedList);
+      
+      const labelToUse = (customLabel && customLabel.trim()) ? customLabel.trim() : getLineLabel(normalized);
+      const updatedLabels = { ...numberLabels, [normalized]: labelToUse };
+      setNumberLabels(updatedLabels);
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('telnyx_saved_numbers', JSON.stringify(updatedList));
+        localStorage.setItem('telnyx_number_labels', JSON.stringify(updatedLabels));
+        window.dispatchEvent(new Event('telnyx_numbers_updated'));
+      }
+      switchLine(normalized);
+    }
+    setNewLinePhone('');
+    setNewLineLabel('');
+  };
+
+  const handleSaveEditedLabel = (num: string, newLabel: string) => {
+    const trimmed = newLabel.trim();
+    const updatedLabels = { ...numberLabels, [num]: trimmed || getLineLabel(num) };
+    setNumberLabels(updatedLabels);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('telnyx_number_labels', JSON.stringify(updatedLabels));
+      window.dispatchEvent(new Event('telnyx_numbers_updated'));
+    }
+    setEditingLineNumber(null);
+    setEditingLineLabel('');
+  };
+
+  const handleRemoveNumber = (numToRemove: string) => {
+    if (availableNumbers.length <= 1) {
+      alert('You must keep at least one active phone line.');
+      return;
+    }
+    const updatedList = availableNumbers.filter((n) => n !== numToRemove);
+    setAvailableNumbers(updatedList);
+    const updatedLabels = { ...numberLabels };
+    delete updatedLabels[numToRemove];
+    setNumberLabels(updatedLabels);
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('telnyx_saved_numbers', JSON.stringify(updatedList));
+      localStorage.setItem('telnyx_number_labels', JSON.stringify(updatedLabels));
+      window.dispatchEvent(new Event('telnyx_numbers_updated'));
+    }
+    if (activeLine === numToRemove && updatedList.length > 0) {
+      switchLine(updatedList[0]);
+    }
+  };
 
   // SMS Inbox State
   const [smsThreads, setSmsThreads] = useState<Thread[]>([]);
@@ -528,29 +705,38 @@ export default function SMSPage() {
           </div>
 
           {/* Dedicated Per-Number Inboxes Tab Bar */}
-          <div className="flex items-center gap-1.5 mb-3 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800 shrink-0 select-none">
-            {[
-              { num: DALLAS_NUMBER, label: 'Dallas', formatted: '+1 (214) 774-6991' },
-              { num: TOLL_FREE_NUMBER, label: 'Toll-Free', formatted: '+1 (866) 777-4939' },
-            ].map((line) => {
-              const isSelected = activeLine === line.num;
-              return (
-                <button
-                  key={line.num}
-                  type="button"
-                  onClick={() => switchLine(line.num)}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    isSelected
-                      ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/15'
-                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
-                  }`}
-                >
-                  <span>{line.label} Inbox</span>
-                  <span className="text-[10px] font-mono opacity-80">({line.formatted})</span>
-                </button>
-              );
-            })}
-          </div>
+          {availableNumbers.length > 0 && (
+            <div className="flex items-center gap-1.5 mb-3 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800 shrink-0 select-none overflow-x-auto scrollbar-none flex-nowrap">
+              {availableNumbers.map((num) => {
+                const label = getLineLabel(num);
+                const isSelected = activeLine === num;
+                return (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => switchLine(num)}
+                    className={`shrink-0 whitespace-nowrap flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/15'
+                        : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                    }`}
+                  >
+                    <span>{label} Inbox</span>
+                    <span className="text-[10px] font-mono opacity-80">({formatPhoneNumber(num)})</span>
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setShowLineManagerModal(true)}
+                className="p-2 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-emerald-400 border border-zinc-700/60 transition-colors shrink-0 flex items-center gap-1 cursor-pointer text-xs font-semibold"
+                title="Manage Phone Lines (Spanner Tool)"
+              >
+                <Wrench size={12} />
+                <span className="text-[10px] hidden sm:inline">Manage</span>
+              </button>
+            </div>
+          )}
 
           {/* Search bar */}
           <div className="relative mb-3 select-none">
@@ -741,30 +927,41 @@ export default function SMSPage() {
                 </div>
 
                 {/* Active Sending Line Bar */}
-                <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border border-zinc-850 rounded-xl my-2 text-xs select-none shrink-0">
-                  <span className="text-zinc-400 text-[11px] font-medium">Sending SMS as:</span>
-                  <div className="flex items-center gap-1.5">
-                    {[
-                      { num: DALLAS_NUMBER, label: 'Dallas', formatted: '+1 (214) 774-6991' },
-                      { num: TOLL_FREE_NUMBER, label: 'Toll-Free', formatted: '+1 (866) 777-4939' },
-                    ].map((l) => (
+                {availableNumbers.length > 0 && (
+                  <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border border-zinc-850 rounded-xl my-2 text-xs select-none shrink-0 overflow-x-auto scrollbar-none">
+                    <span className="text-zinc-400 text-[11px] font-medium shrink-0 mr-2">Sending SMS as:</span>
+                    <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none flex-nowrap">
+                      {availableNumbers.map((num) => {
+                        const label = getLineLabel(num);
+                        const isSelected = activeLine === num;
+                        return (
+                          <button
+                            key={num}
+                            type="button"
+                            onClick={() => switchLine(num)}
+                            className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                              isSelected
+                                ? 'bg-emerald-500 text-black font-extrabold shadow-sm'
+                                : 'bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700'
+                            }`}
+                          >
+                            <span>{label}</span>
+                            <span className="text-[10px] font-mono opacity-80 font-normal">({formatPhoneNumber(num)})</span>
+                            {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-black ml-0.5" />}
+                          </button>
+                        );
+                      })}
                       <button
-                        key={l.num}
                         type="button"
-                        onClick={() => switchLine(l.num)}
-                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition-all ${
-                          activeLine === l.num
-                            ? 'bg-emerald-500 text-black font-extrabold shadow-sm'
-                            : 'bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700'
-                        }`}
+                        onClick={() => setShowLineManagerModal(true)}
+                        className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-emerald-400 border border-zinc-750 transition-colors shrink-0 cursor-pointer"
+                        title="Manage Phone Lines (Spanner Tool)"
                       >
-                        <span>{l.label}</span>
-                        <span className="text-[10px] font-mono opacity-80 font-normal">({l.formatted})</span>
-                        {activeLine === l.num && <span className="w-1.5 h-1.5 rounded-full bg-black ml-0.5" />}
+                        <Wrench size={11} />
                       </button>
-                    ))}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Error log alert inside chat */}
                 {errorMessage && (
@@ -1530,6 +1727,272 @@ export default function SMSPage() {
                 className="flex-1 py-2 bg-emerald-500 text-black hover:bg-emerald-400 rounded-xl text-xs font-bold uppercase tracking-wider transition-all"
               >
                 Create Template
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MANAGE PHONE LINES (SPANNER TOOL) MODAL */}
+      {showLineManagerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="w-full max-w-lg bg-zinc-950 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-5 animate-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800">
+            {/* Header */}
+            <div className="flex items-start justify-between pb-3 border-b border-zinc-900">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400 shrink-0">
+                  <Wrench size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                    Manage Phone Lines
+                    <span className="text-[10px] font-mono font-normal uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                      Spanner Tool
+                    </span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Add, nickname, and manage numbers for Outbound Calling & SMS.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLineManagerModal(false);
+                  setEditingLineNumber(null);
+                }}
+                className="p-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Add New Line Form */}
+            <div className="p-4 rounded-2xl bg-zinc-900/50 border border-zinc-850 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-zinc-200 flex items-center gap-1.5">
+                  <Plus size={13} className="text-emerald-400" />
+                  Add Future Phone Line
+                </span>
+                <span className="text-[10px] text-zinc-500">Supports US, Canada & International</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider block mb-1">
+                    Phone Number
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="+1 (555) 000-0000"
+                    value={newLinePhone}
+                    onChange={(e) => setNewLinePhone(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-emerald-500 transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider block mb-1">
+                    Line Nickname / Label
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Dallas, Sales, VIP Line"
+                    value={newLineLabel}
+                    onChange={(e) => setNewLineLabel(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-emerald-500 transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => handleAddLineSubmit(newLinePhone, newLineLabel)}
+                  disabled={!newLinePhone.trim()}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 disabled:hover:bg-emerald-500 text-black text-xs font-bold shadow-lg shadow-emerald-500/20 transition-all active:scale-95 cursor-pointer"
+                >
+                  <Plus size={13} />
+                  <span>Add Line</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Configured Lines List */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-zinc-400 uppercase tracking-wider px-1">
+                <span>Configured Lines ({availableNumbers.length})</span>
+                <span className="text-[10px] text-zinc-500 font-normal normal-case">Click to switch or rename</span>
+              </div>
+
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {availableNumbers.map((num) => {
+                  const isCurrent = activeLine === num;
+                  const isEditing = editingLineNumber === num;
+                  const label = getLineLabel(num);
+
+                  return (
+                    <div
+                      key={num}
+                      className={`flex items-center justify-between p-3 rounded-2xl border transition-all ${
+                        isCurrent
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                          : 'bg-zinc-900/40 border-zinc-850 hover:border-zinc-800 text-zinc-300'
+                      }`}
+                    >
+                      {/* Left info or editing input */}
+                      <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
+                        <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isCurrent ? 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)]' : 'bg-zinc-700'}`} />
+                        
+                        {isEditing ? (
+                          <div className="flex items-center gap-2 flex-1">
+                            <input
+                              type="text"
+                              value={editingLineLabel}
+                              onChange={(e) => setEditingLineLabel(e.target.value)}
+                              placeholder="Line nickname"
+                              className="bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 w-full max-w-[140px]"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleSaveEditedLabel(num, editingLineLabel);
+                                } else if (e.key === 'Escape') {
+                                  setEditingLineNumber(null);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditedLabel(num, editingLineLabel)}
+                              className="p-1 rounded-lg bg-emerald-500 text-black hover:bg-emerald-400 cursor-pointer"
+                              title="Save nickname"
+                            >
+                              <Check size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingLineNumber(null)}
+                              className="p-1 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white cursor-pointer"
+                              title="Cancel"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-white truncate">{label}</span>
+                              {isCurrent && (
+                                <span className="text-[9px] uppercase font-bold tracking-wider bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded font-mono">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] font-mono text-zinc-400 block truncate">
+                              {formatPhoneNumber(num)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Right actions */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {!isCurrent && (
+                          <button
+                            type="button"
+                            onClick={() => switchLine(num)}
+                            className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-emerald-500 hover:text-black text-xs font-semibold text-zinc-300 transition-all cursor-pointer"
+                          >
+                            Set Active
+                          </button>
+                        )}
+                        {!isEditing && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingLineNumber(num);
+                              setEditingLineLabel(numberLabels[num] || getLineLabel(num));
+                            }}
+                            className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+                            title="Rename line nickname"
+                          >
+                            <Edit2 size={12} />
+                          </button>
+                        )}
+                        {availableNumbers.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteNumber(num)}
+                            className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 transition-colors cursor-pointer"
+                            title="Remove line"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Information Notice */}
+            <div className="p-3 rounded-xl bg-zinc-900/30 border border-zinc-850/60 text-[11px] text-zinc-400 leading-relaxed">
+              💡 <strong>Tip:</strong> All numbers added here are instantly available in your Keypad caller ID dropdown, Call History tabs, SMS Inboxes, and Chat views across both the dialer and SMS workspace.
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end pt-2 border-t border-zinc-900">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLineManagerModal(false);
+                  setEditingLineNumber(null);
+                }}
+                className="px-5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-xs font-semibold text-zinc-200 transition-all cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM REMOVE NUMBER MODAL */}
+      {confirmDeleteNumber && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-zinc-950 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/10 border border-rose-500/25 flex items-center justify-center text-rose-400 shrink-0">
+                <Trash2 size={18} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-zinc-100">Remove Phone Line</h3>
+                <p className="text-xs text-zinc-400 mt-0.5">Are you sure you want to remove this line?</p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-850 font-mono text-xs text-zinc-100 text-center font-bold tracking-wide">
+              {formatPhoneNumber(confirmDeleteNumber)}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteNumber(null)}
+                className="px-4 py-2 rounded-xl border border-zinc-800 text-xs font-semibold text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleRemoveNumber(confirmDeleteNumber);
+                  setConfirmDeleteNumber(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold shadow-lg shadow-rose-500/20 transition-all active:scale-95 cursor-pointer"
+              >
+                Remove Line
               </button>
             </div>
           </div>
