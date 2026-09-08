@@ -3987,7 +3987,9 @@ export default function Dialer({
                     const contactName = thread.contact?.name || thread.contact?.phoneNumber || 'Contact';
                     const contactPhone = thread.contact?.phoneNumber || '';
                     const lastMsg = thread.lastMessage;
-                    const isOutbound = lastMsg?.direction === 'outbound';
+                    const activeClean = normalizeDigitsOnly(telnyxNumber || '').slice(-10);
+                    const senderClean = normalizeDigitsOnly(lastMsg?.sender || '').slice(-10);
+                    const isOutbound = activeClean && senderClean ? senderClean === activeClean : lastMsg?.direction === 'outbound';
                     const unread = (thread.unreadCount || 0) > 0;
 
                     return (
@@ -4186,7 +4188,11 @@ export default function Dialer({
                   </div>
                 ) : (
                   smsMessages.map((msg) => {
-                    const isOutbound = msg.direction === 'outbound';
+                    const activeClean = normalizeDigitsOnly(telnyxNumber || '').slice(-10);
+                    const senderClean = normalizeDigitsOnly(msg.sender || '').slice(-10);
+                    const isOutbound = activeClean && senderClean
+                      ? senderClean === activeClean
+                      : msg.direction === 'outbound';
                     return (
                       <div
                         key={msg.id || msg.telnyxMessageId || Math.random()}

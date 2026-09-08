@@ -190,7 +190,18 @@ export async function getMessages(contactId: string, linePhoneNumber?: string) {
       where: { OR: orClauses },
       orderBy: { timestamp: 'asc' },
     });
-    return { success: true, messages };
+
+    const activeClean = activeLine.replace(/\D/g, '').slice(-10);
+    const normalizedMessages = messages.map(msg => {
+      const senderClean = (msg.sender || '').replace(/\D/g, '').slice(-10);
+      const isOutbound = activeClean && senderClean ? senderClean === activeClean : msg.direction === 'outbound';
+      return {
+        ...msg,
+        direction: isOutbound ? 'outbound' : 'inbound'
+      };
+    });
+
+    return { success: true, messages: normalizedMessages };
   } catch (error: any) {
     console.error('[getMessages Action Error]:', error);
     return { success: false, error: error.message };
@@ -201,6 +212,7 @@ export async function getThreads(linePhoneNumber?: string) {
   try {
     const activeLine = linePhoneNumber || process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
     const lineVariants = getPhoneVariants(activeLine);
+    const activeClean = activeLine.replace(/\D/g, '').slice(-10);
 
     // Strictly isolate messages for this line
     const messages = await db.message.findMany({
@@ -219,7 +231,8 @@ export async function getThreads(linePhoneNumber?: string) {
     const phonesToFetch = new Set<string>();
 
     for (const msg of messages) {
-      const isOutbound = msg.direction === 'outbound' || lineVariants.includes(msg.sender);
+      const senderClean = (msg.sender || '').replace(/\D/g, '').slice(-10);
+      const isOutbound = activeClean && senderClean ? senderClean === activeClean : lineVariants.includes(msg.sender);
       const otherParty = isOutbound ? msg.recipient : msg.sender;
       const normOther = normalizePhone(otherParty) || otherParty;
       if (!normOther) continue;
@@ -245,12 +258,18 @@ export async function getThreads(linePhoneNumber?: string) {
     }
 
     for (const msg of messages) {
-      const isOutbound = msg.direction === 'outbound' || lineVariants.includes(msg.sender);
+      const senderClean = (msg.sender || '').replace(/\D/g, '').slice(-10);
+      const isOutbound = activeClean && senderClean ? senderClean === activeClean : lineVariants.includes(msg.sender);
       const otherParty = isOutbound ? msg.recipient : msg.sender;
       const normOther = normalizePhone(otherParty) || otherParty;
       if (!normOther) continue;
 
       const threadKey = normOther;
+      const normalizedMsg = {
+        ...msg,
+        direction: isOutbound ? 'outbound' : 'inbound',
+      };
+
       if (!threadsMap.has(threadKey)) {
         let contact = (msg.contactId && contactById.get(msg.contactId)) || contactByPhone.get(normOther);
         if (!contact) {
@@ -266,11 +285,11 @@ export async function getThreads(linePhoneNumber?: string) {
 
         threadsMap.set(threadKey, {
           contact,
-          lastMessage: msg,
-          unreadCount: (msg.direction === 'inbound' && msg.status === 'received') ? 1 : 0,
+          lastMessage: normalizedMsg,
+          unreadCount: (!isOutbound && msg.status === 'received') ? 1 : 0,
         });
       } else {
-        if (msg.direction === 'inbound' && msg.status === 'received') {
+        if (!isOutbound && msg.status === 'received') {
           const entry = threadsMap.get(threadKey)!;
           entry.unreadCount += 1;
         }
@@ -332,7 +351,17 @@ export async function getMessagesByPhone(phoneNumber: string, linePhoneNumber?: 
       orderBy: { timestamp: 'asc' },
     });
 
-    return { success: true, messages, contact };
+    const activeClean = activeLine.replace(/\D/g, '').slice(-10);
+    const normalizedMessages = messages.map(msg => {
+      const senderClean = (msg.sender || '').replace(/\D/g, '').slice(-10);
+      const isOutbound = activeClean && senderClean ? senderClean === activeClean : msg.direction === 'outbound';
+      return {
+        ...msg,
+        direction: isOutbound ? 'outbound' : 'inbound'
+      };
+    });
+
+    return { success: true, messages: normalizedMessages, contact };
   } catch (error: any) {
     console.error('[getMessagesByPhone Error]:', error);
     return { success: false, error: error.message };

@@ -790,7 +790,12 @@ export default function SMSPage() {
                     </div>
                   ) : (
                     activeThreadMessages.map((msg) => {
-                      const isInbound = msg.direction === 'inbound';
+                      const activeClean = (activeLine || '').replace(/\D/g, '').slice(-10);
+                      const senderClean = (msg.sender || '').replace(/\D/g, '').slice(-10);
+                      const isOutbound = activeClean && senderClean
+                        ? senderClean === activeClean
+                        : msg.direction === 'outbound';
+                      const isInbound = !isOutbound;
                       const msgTime = formatTime(new Date(msg.timestamp).getTime());
                       const msgDate = new Date(msg.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
 
