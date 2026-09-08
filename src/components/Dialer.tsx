@@ -8,9 +8,12 @@ import {
   MicOff, 
   Delete, 
   Trash2, 
-  ArrowUpRight, 
-  ArrowDownLeft, 
+  PhoneIncoming, 
+  PhoneOutgoing, 
+  PhoneMissed, 
   PhoneCall, 
+  ChevronDown, 
+  Plus, 
   X, 
   Clock,
   Settings,
@@ -21,18 +24,26 @@ import {
   Upload,
   RotateCcw,
   Voicemail,
-  FileText,
   Building2,
   Send,
   MessageSquare,
   Loader2,
   Shield,
   ShieldCheck,
-  ShieldAlert
+  ShieldAlert,
+  Search,
+  ArrowLeft,
+  CheckCheck,
+  Check,
+  User,
+  UserPlus,
+  Users,
+  Edit2
 } from 'lucide-react';
 import { audioService } from '@/utils/audio';
-import { sendSMS, getMessagesByPhone } from '@/app/actions/sms';
+import { sendSMS, getMessagesByPhone, getThreads } from '@/app/actions/sms';
 import { getTemplates } from '@/app/actions/templates';
+import { getContacts, createContact, updateContact, deleteContact } from '@/app/actions/contacts';
 import { pusherClient } from '@/utils/pusher-client';
 
 interface CallLog {
@@ -41,7 +52,136 @@ interface CallLog {
   type: 'incoming' | 'outgoing' | 'missed';
   timestamp: number;
   duration?: number;
+  line?: string;
+  name?: string;
 }
+
+interface SavedContact {
+  id?: string;
+  name: string;
+  phoneNumber: string;
+  tags?: string[];
+  notes?: string | null;
+  email?: string | null;
+  company?: string | null;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
+}
+
+const SAVED_CONTACTS_CACHE_KEY = 'dialer_saved_contacts_cache';
+
+const loadSavedContactsCache = (): SavedContact[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(SAVED_CONTACTS_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn('Failed to parse cached contacts:', e);
+  }
+  return [];
+};
+
+const saveSavedContactsCache = (contacts: SavedContact[]) => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(SAVED_CONTACTS_CACHE_KEY, JSON.stringify(contacts));
+  } catch (e) {
+    console.warn('Failed to save contacts cache:', e);
+  }
+};
+
+const normalizeDigitsOnly = (num: string): string => {
+  return (num || '').replace(/\D/g, '');
+};
+
+const getHistoryKeyForNumber = (num?: string): string => {
+  const clean = (num || '').replace(/\D/g, '');
+  return clean ? `call_dialer_history_${clean}` : 'call_dialer_history';
+};
+
+const loadHistoryForNumber = (num?: string): CallLog[] => {
+  if (typeof window === 'undefined') return [];
+  const key = getHistoryKeyForNumber(num);
+  let saved = localStorage.getItem(key);
+
+  // Backwards compatibility: if specific key doesn't exist, migrate from legacy key
+  if (!saved) {
+    const legacy = localStorage.getItem('call_dialer_history');
+    if (legacy) {
+      saved = legacy;
+      localStorage.setItem(key, legacy);
+    }
+  }
+
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {
+      console.error('Error parsing call history:', e);
+    }
+  }
+  return [];
+};
+
+const saveHistoryForNumber = (num: string | undefined, history: CallLog[]) => {
+  if (typeof window === 'undefined') return;
+  const key = getHistoryKeyForNumber(num);
+  const data = JSON.stringify(history);
+  localStorage.setItem(key, data);
+  localStorage.setItem('call_dialer_history', data);
+};
+
+const formatRelativeTime = (dateInput: string | number | Date): string => {
+  if (!dateInput) return '';
+  const date = new Date(dateInput);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHours = Math.floor(diffMin / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffSec < 60) return 'Just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHours < 24) return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return date.toLocaleDateString([], { weekday: 'short' });
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+};
+
+const normalizePhone = (raw: string): string => {
+  if (!raw) return '';
+  const digits = raw.replace(/[^0-9+]/g, '');
+  if (digits.startsWith('+')) return digits;
+  if (digits.length === 10) return '+1' + digits;
+  if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  return '+' + digits;
+};
+
+const getPhoneVariants = (phone?: string): string[] => {
+  if (!phone) return [];
+  const variants = new Set<string>();
+  const raw = phone.trim();
+  if (raw) variants.add(raw);
+  const normalized = normalizePhone(raw);
+  if (normalized) variants.add(normalized);
+  const digits = raw.replace(/\D/g, '');
+  if (digits) {
+    variants.add(digits);
+    if (digits.length === 11 && digits.startsWith('1')) {
+      variants.add(digits.slice(1));
+      variants.add(`+${digits}`);
+    } else if (digits.length === 10) {
+      variants.add(`1${digits}`);
+      variants.add(`+1${digits}`);
+    }
+  }
+  return Array.from(variants);
+};
 
 // Helper to modify SDP for higher Opus quality constraints
 const modifySdp = (sdp: string): string => {
@@ -259,6 +399,10 @@ export default function Dialer({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [telnyxNumber, setTelnyxNumber] = useState<string>('');
   const [telnyxSmsNumber, setTelnyxSmsNumber] = useState<string>('');
+  const [availableNumbers, setAvailableNumbers] = useState<string[]>([]);
+  const [newNumberInput, setNewNumberInput] = useState('');
+  const [showNumberDropdown, setShowNumberDropdown] = useState(false);
+  const telnyxNumberRef = useRef('');
 
   // Audio Device Selection
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
@@ -280,7 +424,239 @@ export default function Dialer({
   // UI State
   const [phoneNumber, setPhoneNumber] = useState('');
   const [callHistory, setCallHistory] = useState<CallLog[]>([]);
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'missed'>('all');
   const [callDuration, setCallDuration] = useState(0);
+
+  // Saved Numbers & Contacts State
+  const [leftPanelTab, setLeftPanelTab] = useState<'recents' | 'contacts'>('recents');
+  const [contacts, setContacts] = useState<SavedContact[]>([]);
+  const [contactsSearch, setContactsSearch] = useState('');
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [contactModalName, setContactModalName] = useState('');
+  const [contactModalPhone, setContactModalPhone] = useState('');
+  const [contactModalId, setContactModalId] = useState<string | undefined>(undefined);
+  const [isSavingContact, setIsSavingContact] = useState(false);
+  const activeCallLogIdRef = useRef<string | null>(null);
+
+  // Instant contact lookup helper (O(1) fuzzy match)
+  const findContactByPhone = useCallback((rawPhone: string): SavedContact | undefined => {
+    if (!rawPhone) return undefined;
+    const cleanRaw = normalizeDigitsOnly(rawPhone);
+    if (!cleanRaw) return undefined;
+    
+    return contacts.find(c => {
+      const cleanContact = normalizeDigitsOnly(c.phoneNumber);
+      if (!cleanContact) return false;
+      if (cleanRaw === cleanContact) return true;
+      if (cleanRaw.length === 10 && cleanContact.length === 11 && cleanContact.startsWith('1') && cleanContact.slice(1) === cleanRaw) return true;
+      if (cleanContact.length === 10 && cleanRaw.length === 11 && cleanRaw.startsWith('1') && cleanRaw.slice(1) === cleanContact) return true;
+      return false;
+    });
+  }, [contacts]);
+
+  // Load contacts from cache and DB
+  useEffect(() => {
+    const cached = loadSavedContactsCache();
+    if (cached.length > 0) {
+      setContacts(cached);
+    }
+    getContacts().then((res) => {
+      if (res.success && res.contacts) {
+        setContacts(res.contacts);
+        saveSavedContactsCache(res.contacts);
+      }
+    }).catch(err => {
+      console.warn('[Contacts] Failed to load contacts from server:', err);
+    });
+  }, []);
+
+  const handleOpenSaveContactModal = (phone: string, defaultName = '', id?: string) => {
+    setContactModalPhone(phone);
+    setContactModalName(defaultName);
+    setContactModalId(id);
+    setShowContactModal(true);
+  };
+
+  const handleSaveContactSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!contactModalPhone.trim() || !contactModalName.trim()) return;
+
+    setIsSavingContact(true);
+    try {
+      const cleanPhone = contactModalPhone.trim();
+      const cleanName = contactModalName.trim();
+      
+      if (contactModalId) {
+        const res = await updateContact(contactModalId, { name: cleanName, phoneNumber: cleanPhone });
+        if (res.success && res.contact) {
+          setContacts(prev => {
+            const updated = prev.map(c => c.id === contactModalId ? { ...c, ...res.contact } : c);
+            saveSavedContactsCache(updated);
+            return updated;
+          });
+        }
+      } else {
+        const res = await createContact(cleanName, cleanPhone);
+        if (res.success && res.contact) {
+          setContacts(prev => {
+            const filtered = prev.filter(c => normalizeDigitsOnly(c.phoneNumber) !== normalizeDigitsOnly(cleanPhone));
+            const updated = [res.contact, ...filtered];
+            saveSavedContactsCache(updated);
+            return updated;
+          });
+        }
+      }
+
+      if (activeSmsContactRef.current && normalizeDigitsOnly(activeSmsContactRef.current.phoneNumber) === normalizeDigitsOnly(cleanPhone)) {
+        setActiveSmsContact(prev => prev ? { ...prev, name: cleanName } : null);
+      }
+
+      setShowContactModal(false);
+      setContactModalName('');
+      setContactModalPhone('');
+      setContactModalId(undefined);
+    } catch (err: any) {
+      console.error('Failed to save contact:', err);
+      alert(err.message || 'Failed to save contact');
+    } finally {
+      setIsSavingContact(false);
+    }
+  };
+
+  const handleDeleteContact = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this saved contact?')) return;
+    try {
+      await deleteContact(id);
+      setContacts(prev => {
+        const updated = prev.filter(c => c.id !== id);
+        saveSavedContactsCache(updated);
+        return updated;
+      });
+    } catch (err) {
+      console.error('Failed to delete contact:', err);
+    }
+  };
+
+  // SMS Inbox & Chat State
+  const [smsView, setSmsView] = useState<'inbox' | 'chat'>('inbox');
+  const [smsThreads, setSmsThreads] = useState<any[]>([]);
+  const [loadingThreads, setLoadingThreads] = useState(false);
+  const [activeSmsContact, setActiveSmsContact] = useState<{ phoneNumber: string; name?: string; contactId?: string } | null>(null);
+  const activeSmsContactRef = useRef<{ phoneNumber: string; name?: string; contactId?: string } | null>(null);
+  const [smsSearchQuery, setSmsSearchQuery] = useState('');
+  const [showNewChatInput, setShowNewChatInput] = useState(false);
+  const [newChatNumber, setNewChatNumber] = useState('');
+  const [loadingSmsMessages, setLoadingSmsMessages] = useState(false);
+
+  const [smsMessages, setSmsMessages] = useState<any[]>([]);
+  const [smsInput, setSmsInput] = useState('');
+  const [isSendingSms, setIsSendingSms] = useState(false);
+  const [smsTemplates, setSmsTemplates] = useState<any[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    activeSmsContactRef.current = activeSmsContact;
+  }, [activeSmsContact]);
+
+  const loadThreadsForLine = useCallback(async (lineNum?: string) => {
+    const line = lineNum || telnyxNumberRef.current;
+    if (!line) return;
+    setLoadingThreads(true);
+    try {
+      const res = await getThreads(line);
+      if (res.success && res.threads) {
+        setSmsThreads(res.threads);
+      }
+    } catch (err) {
+      console.error('[Dialer SMS] Error loading threads:', err);
+    } finally {
+      setLoadingThreads(false);
+    }
+  }, []);
+
+  const loadSmsHistory = useCallback(async (phoneToLoad: string, lineNum?: string) => {
+    if (!phoneToLoad) return;
+    const cleaned = phoneToLoad.replace(/[^0-9+]/g, '');
+    if (cleaned.length < 7) return;
+    setLoadingSmsMessages(true);
+    try {
+      const activeLine = lineNum || telnyxNumberRef.current;
+      const res = await getMessagesByPhone(cleaned, activeLine);
+      if (res.success && res.messages) {
+        setSmsMessages(res.messages);
+      }
+    } catch (err) {
+      console.warn('[Dialer SMS] Failed to load messages:', err);
+    } finally {
+      setLoadingSmsMessages(false);
+    }
+  }, []);
+
+  const openChatWithNumber = (targetNum: string, contactName?: string, contactId?: string) => {
+    if (!targetNum) return;
+    const normalized = normalizePhone(targetNum);
+    const cleaned = normalized || targetNum.replace(/[^0-9+]/g, '');
+    if (cleaned.length < 7) return;
+    const contactObj = {
+      phoneNumber: cleaned,
+      name: contactName || formatPhoneNumber(cleaned),
+      contactId: contactId,
+    };
+    setActiveSmsContact(contactObj);
+    activeSmsContactRef.current = contactObj;
+    setSmsView('chat');
+    setShowNewChatInput(false);
+    setNewChatNumber('');
+    loadSmsHistory(cleaned, telnyxNumberRef.current);
+  };
+
+  useEffect(() => {
+    telnyxNumberRef.current = telnyxNumber;
+  }, [telnyxNumber]);
+
+  const switchActiveNumber = (newNum: string) => {
+    if (!newNum) return;
+    setTelnyxNumber(newNum);
+    telnyxNumberRef.current = newNum;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('telnyx_active_number', newNum);
+      const isolatedHistory = loadHistoryForNumber(newNum);
+      setCallHistory(isolatedHistory);
+    }
+    // Isolate SMS inbox strictly for the switched line!
+    loadThreadsForLine(newNum);
+    if (activeSmsContactRef.current) {
+      loadSmsHistory(activeSmsContactRef.current.phoneNumber, newNum);
+    }
+    setShowNumberDropdown(false);
+  };
+
+  const handleAddNumber = (numToAdd: string) => {
+    const trimmed = numToAdd.trim();
+    if (!trimmed) return;
+    if (!availableNumbers.includes(trimmed)) {
+      const updatedList = [...availableNumbers, trimmed];
+      setAvailableNumbers(updatedList);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('telnyx_saved_numbers', JSON.stringify(updatedList));
+      }
+      switchActiveNumber(trimmed);
+      setNewNumberInput('');
+    }
+  };
+
+  const handleRemoveNumber = (numToRemove: string) => {
+    const updatedList = availableNumbers.filter((n) => n !== numToRemove);
+    setAvailableNumbers(updatedList);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('telnyx_saved_numbers', JSON.stringify(updatedList));
+    }
+    if (telnyxNumber === numToRemove && updatedList.length > 0) {
+      switchActiveNumber(updatedList[0]);
+    }
+  };
 
   // Sound Pad State — 4 slots (0-2 regular, 3 = VM Drop)
   const [soundFiles, setSoundFiles] = useState<(File | null)[]>([null, null, null, null]);
@@ -289,15 +665,6 @@ export default function Dialer({
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [settingsMicVolume, setSettingsMicVolume] = useState(0);
   const [vmDropping, setVmDropping] = useState(false);
-
-  // Quick SMS State
-  const [smsMessages, setSmsMessages] = useState<any[]>([]);
-  const [smsInput, setSmsInput] = useState('');
-  const [isSendingSms, setIsSendingSms] = useState(false);
-  const [smsTemplates, setSmsTemplates] = useState<any[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState('');
-  const messageEndRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Account status and health
   const [balance, setBalance] = useState<string>('0.000');
@@ -688,9 +1055,25 @@ export default function Dialer({
     const reconnectTimeoutRef = { current: null as any };
     const isReconnectingRef = { current: false };
 
-    // Retrieve public caller ID number
-    const outboundNumber = process.env.NEXT_PUBLIC_TELNYX_NUMBER || '';
-    setTelnyxNumber(outboundNumber);
+    // Retrieve public caller ID number & load saved lines
+    const defaultOutboundNumber = process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
+    let savedNumbers: string[] = [];
+    try {
+      const stored = localStorage.getItem('telnyx_saved_numbers');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) savedNumbers = parsed;
+      }
+    } catch (e) {
+      console.error('Failed to parse saved numbers:', e);
+    }
+    const combined = Array.from(new Set([defaultOutboundNumber, ...savedNumbers].filter(Boolean)));
+    setAvailableNumbers(combined);
+
+    const activeStored = localStorage.getItem('telnyx_active_number');
+    const initialActive = (activeStored && combined.includes(activeStored)) ? activeStored : defaultOutboundNumber;
+    setTelnyxNumber(initialActive);
+    telnyxNumberRef.current = initialActive;
 
     // Populate devices list immediately
     loadAudioDevices(false);
@@ -965,20 +1348,44 @@ export default function Dialer({
                   ? (duration && duration > 0 ? 'incoming' : 'missed') 
                   : 'outgoing';
 
-                const newLog: CallLog = {
-                  id: Math.random().toString(36).substr(2, 9),
-                  number: call.destinationNumber || call.callerNumber || phoneNumberRef.current,
-                  type: logType,
-                  timestamp: Date.now(),
-                  duration,
-                };
+                const targetNumber = isIncoming
+                  ? (call.callerNumber || call.options?.remoteCallerNumber || call.options?.callerIdNumber || call.options?.callerNumber || notification?.displayNumber || phoneNumberRef.current || 'Unknown')
+                  : (call.destinationNumber || phoneNumberRef.current || 'Unknown');
+
+                const currentLine = telnyxNumberRef.current || telnyxNumber;
+                const matchedContact = findContactByPhone(targetNumber);
 
                 setCallHistory(prev => {
-                  const updated = [newLog, ...prev];
-                  console.log('[Dialer Log] Saving call history item. New list length:', updated.length);
-                  localStorage.setItem('call_dialer_history', JSON.stringify(updated));
+                  let updated: CallLog[];
+                  const existingIdx = activeCallLogIdRef.current 
+                    ? prev.findIndex(l => l.id === activeCallLogIdRef.current) 
+                    : -1;
+
+                  if (existingIdx !== -1) {
+                    updated = [...prev];
+                    updated[existingIdx] = {
+                      ...updated[existingIdx],
+                      duration: duration || 0,
+                      line: currentLine,
+                      name: matchedContact?.name || updated[existingIdx].name,
+                    };
+                  } else {
+                    const newLog: CallLog = {
+                      id: Math.random().toString(36).substr(2, 9),
+                      number: targetNumber,
+                      type: logType,
+                      timestamp: Date.now(),
+                      duration,
+                      line: currentLine,
+                      name: matchedContact?.name,
+                    };
+                    updated = [newLog, ...prev];
+                  }
+                  console.log('[Dialer Log] Saving call history for line', currentLine, 'Count:', updated.length);
+                  saveHistoryForNumber(currentLine, updated);
                   return updated;
                 });
+                activeCallLogIdRef.current = null;
 
                 // Notify parent power dialer of call end
                 if (onCallEnded) {
@@ -1039,19 +1446,11 @@ export default function Dialer({
   // Load history from localStorage on client-side mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const savedHistory = localStorage.getItem('call_dialer_history');
-      console.log('[Dialer Log] Loading history from localStorage:', savedHistory);
-      if (savedHistory) {
-        try {
-          const parsed = JSON.parse(savedHistory);
-          if (Array.isArray(parsed)) {
-            setCallHistory(parsed);
-            console.log('[Dialer Log] History logs loaded successfully. Count:', parsed.length);
-          }
-        } catch (e) {
-          console.error('Error loading history:', e);
-        }
-      }
+      const activeLine = localStorage.getItem('telnyx_active_number') || process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
+      const history = loadHistoryForNumber(activeLine);
+      setCallHistory(history);
+      loadThreadsForLine(activeLine);
+      console.log('[Dialer Log] History logs loaded for line', activeLine, 'Count:', history.length);
 
       // Load audio quality settings
       setEnableAEC(localStorage.getItem('telnyx_aec') !== 'false');
@@ -1071,22 +1470,7 @@ export default function Dialer({
         }
       }
     }
-  }, []);
-
-  // load SMS history helper
-  const loadSmsHistory = useCallback(async (phoneToLoad: string) => {
-    if (!phoneToLoad) return;
-    const cleaned = phoneToLoad.replace(/[^0-9+]/g, '');
-    if (cleaned.length < 10) return;
-    try {
-      const res = await getMessagesByPhone(cleaned);
-      if (res.success && res.messages) {
-        setSmsMessages(res.messages);
-      }
-    } catch (err) {
-      console.warn('[Dialer SMS] Failed to load messages:', err);
-    }
-  }, []);
+  }, [loadThreadsForLine]);
 
   // Load templates on mount
   useEffect(() => {
@@ -1097,58 +1481,105 @@ export default function Dialer({
     });
   }, []);
 
-  // Fetch SMS history when activeLead or typed phone number changes
+  // Sync activeLead with SMS chat
   useEffect(() => {
-    const activeNum = activeLead?.phone || phoneNumber;
-    if (activeNum && activeNum.replace(/[^0-9+]/g, '').length >= 10) {
-      loadSmsHistory(activeNum);
-    } else {
-      setSmsMessages([]);
+    if (activeLead?.phone && activeLead.phone.replace(/[^0-9+]/g, '').length >= 10) {
+      const contactObj = {
+        phoneNumber: activeLead.phone,
+        name: `${activeLead.firstName} ${activeLead.lastName}`.trim() || activeLead.phone,
+        contactId: activeLead.id,
+      };
+      setActiveSmsContact(contactObj);
+      activeSmsContactRef.current = contactObj;
+      setSmsView('chat');
+      loadSmsHistory(activeLead.phone, telnyxNumberRef.current);
     }
-  }, [activeLead, phoneNumber, loadSmsHistory]);
+  }, [activeLead, loadSmsHistory]);
 
-  // Sync real-time messages via Pusher
+  // Sync real-time messages via Pusher with line isolation
   useEffect(() => {
     if (!pusherClient) return;
     const channel = pusherClient.subscribe('sms-channel');
 
     const handleNewMessage = (data: any) => {
-      const activeNum = activeLead?.phone || phoneNumber;
-      if (!activeNum) return;
-      const cleanedActive = activeNum.replace(/[^0-9+]/g, '');
-      const cleanedMsgRecipient = (data.recipient || '').replace(/[^0-9+]/g, '');
-      const cleanedMsgSender = (data.sender || '').replace(/[^0-9+]/g, '');
+      const currentLine = telnyxNumberRef.current;
+      const lineVariants = getPhoneVariants(currentLine);
 
-      if (cleanedMsgRecipient.includes(cleanedActive) || cleanedMsgSender.includes(cleanedActive)) {
-        setSmsMessages(prev => {
-          if (prev.some(m => m.id === data.id || (m.telnyxMessageId && m.telnyxMessageId === data.telnyxMessageId))) {
-            return prev;
-          }
-          return [...prev, data];
-        });
+      // Check if message belongs to the active line (inbound to this line or outbound from this line)
+      const isMsgForThisLine = 
+        lineVariants.length === 0 || 
+        lineVariants.some(v => (data.recipient && data.recipient.includes(v)) || (data.sender && data.sender.includes(v)));
+
+      if (!isMsgForThisLine) {
+        // Message is for another line: do not mix up!
+        return;
       }
+
+      // If viewing active chat with this contact, append to message feed
+      if (activeSmsContactRef.current) {
+        const contactVariants = getPhoneVariants(activeSmsContactRef.current.phoneNumber);
+        const isMsgForActiveContact = contactVariants.some(v => 
+          (data.recipient && data.recipient.includes(v)) || (data.sender && data.sender.includes(v))
+        );
+
+        if (isMsgForActiveContact) {
+          setSmsMessages(prev => {
+            if (prev.some(m => m.id === data.id || (m.telnyxMessageId && m.telnyxMessageId === data.telnyxMessageId))) {
+              return prev;
+            }
+            return [...prev, data];
+          });
+        }
+      }
+
+      // Refresh threads for current line so inbox is always live
+      loadThreadsForLine(currentLine);
     };
 
     const handleStatusUpdate = (data: any) => {
-      const activeNum = activeLead?.phone || phoneNumber;
-      if (!activeNum) return;
-      const cleanedActive = activeNum.replace(/[^0-9+]/g, '');
-      const cleanedMsgRecipient = (data.recipient || '').replace(/[^0-9+]/g, '');
-      const cleanedMsgSender = (data.sender || '').replace(/[^0-9+]/g, '');
+      setSmsMessages(prev => prev.map(m => (m.id === data.id || m.telnyxMessageId === data.telnyxMessageId) ? { ...m, ...data } : m));
+      loadThreadsForLine(telnyxNumberRef.current);
+    };
 
-      if (cleanedMsgRecipient.includes(cleanedActive) || cleanedMsgSender.includes(cleanedActive)) {
-        setSmsMessages(prev => prev.map(m => m.id === data.id ? { ...m, ...data } : m));
-      }
+    const handleNewContactEvent = (newC: SavedContact) => {
+      setContacts(prev => {
+        const filtered = prev.filter(c => c.id !== newC.id && normalizeDigitsOnly(c.phoneNumber) !== normalizeDigitsOnly(newC.phoneNumber));
+        const updated = [newC, ...filtered];
+        saveSavedContactsCache(updated);
+        return updated;
+      });
+    };
+
+    const handleUpdateContactEvent = (updatedC: SavedContact) => {
+      setContacts(prev => {
+        const updated = prev.map(c => c.id === updatedC.id ? { ...c, ...updatedC } : c);
+        saveSavedContactsCache(updated);
+        return updated;
+      });
+    };
+
+    const handleDeleteContactEvent = (data: { id: string }) => {
+      setContacts(prev => {
+        const updated = prev.filter(c => c.id !== data.id);
+        saveSavedContactsCache(updated);
+        return updated;
+      });
     };
 
     channel.bind('new-message', handleNewMessage);
     channel.bind('message-status-update', handleStatusUpdate);
+    channel.bind('new-contact', handleNewContactEvent);
+    channel.bind('update-contact', handleUpdateContactEvent);
+    channel.bind('delete-contact', handleDeleteContactEvent);
 
     return () => {
       channel.unbind('new-message', handleNewMessage);
       channel.unbind('message-status-update', handleStatusUpdate);
+      channel.unbind('new-contact', handleNewContactEvent);
+      channel.unbind('update-contact', handleUpdateContactEvent);
+      channel.unbind('delete-contact', handleDeleteContactEvent);
     };
-  }, [activeLead, phoneNumber]);
+  }, [loadThreadsForLine]);
 
   // Scroll to bottom of message thread
   useEffect(() => {
@@ -1182,25 +1613,31 @@ export default function Dialer({
 
   const handleSendSms = async (e: React.FormEvent) => {
     e.preventDefault();
-    const activeNum = activeLead?.phone || phoneNumber;
-    if (!activeNum || !smsInput.trim()) return;
+    const recipientNum = activeSmsContact?.phoneNumber || activeLead?.phone || phoneNumber;
+    if (!recipientNum || !smsInput.trim()) return;
 
-    const cleaned = activeNum.replace(/[^0-9+]/g, '');
-    if (cleaned.length < 10) return;
+    const cleaned = recipientNum.replace(/[^0-9+]/g, '');
+    if (cleaned.length < 7) return;
 
+    const sendingFrom = telnyxNumber || telnyxSmsNumber || '';
     setIsSendingSms(true);
-    const res = await sendSMS(cleaned, smsInput.trim());
+    const res = await sendSMS(cleaned, smsInput.trim(), activeSmsContact?.contactId, sendingFrom);
     setIsSendingSms(false);
 
     if (res.success) {
       setSmsInput('');
       setSelectedTemplateId('');
-      loadSmsHistory(cleaned);
+      if (res.message) {
+        setSmsMessages(prev => {
+          if (prev.some(m => m.id === res.message?.id)) return prev;
+          return [...prev, res.message];
+        });
+      }
+      loadThreadsForLine(sendingFrom);
     } else {
       alert(res.error || 'Failed to send SMS');
     }
   };
-
 
   // Load status and balance from backend API route
   useEffect(() => {
@@ -1217,7 +1654,15 @@ export default function Dialer({
           setBalance(data.balance || '0.000');
           setNumberHealth(data.numberHealth || 'unknown');
           if (data.number) {
-            setTelnyxNumber(data.number);
+            setAvailableNumbers(prev => Array.from(new Set([data.number, ...prev].filter(Boolean))));
+            const savedActive = localStorage.getItem('telnyx_active_number');
+            const targetLine = savedActive || data.number;
+            if (!savedActive) {
+              setTelnyxNumber(data.number);
+              telnyxNumberRef.current = data.number;
+              setCallHistory(loadHistoryForNumber(data.number));
+            }
+            loadThreadsForLine(targetLine);
           }
           if (data.smsNumber) {
             setTelnyxSmsNumber(data.smsNumber);
@@ -1397,6 +1842,26 @@ export default function Dialer({
       }
       console.log(`[Dialer] Outgoing call to: ${cleanNumber}`);
 
+      const currentLine = telnyxNumberRef.current || telnyxNumber;
+      const matchedContact = findContactByPhone(cleanNumber);
+      const callLogId = Math.random().toString(36).substr(2, 9);
+      activeCallLogIdRef.current = callLogId;
+
+      const newLog: CallLog = {
+        id: callLogId,
+        number: cleanNumber,
+        type: 'outgoing',
+        timestamp: Date.now(),
+        line: currentLine,
+        name: matchedContact?.name,
+      };
+
+      setCallHistory(prev => {
+        const updated = [newLog, ...prev];
+        saveHistoryForNumber(currentLine, updated);
+        return updated;
+      });
+
       setCallState('dialing');
       audioService.startRingback();
       startRingTimer();
@@ -1471,19 +1936,43 @@ export default function Dialer({
           ? (duration && duration > 0 ? 'incoming' : 'missed') 
           : 'outgoing';
 
-        const newLog: CallLog = {
-          id: Math.random().toString(36).substr(2, 9),
-          number: currentCallRef.current.destinationNumber || currentCallRef.current.callerNumber || phoneNumberRef.current || 'Unknown',
-          type: logType,
-          timestamp: Date.now(),
-          duration,
-        };
+        const targetNumber = isIncoming
+          ? (currentCallRef.current.callerNumber || currentCallRef.current.options?.remoteCallerNumber || phoneNumberRef.current || 'Unknown')
+          : (currentCallRef.current.destinationNumber || phoneNumberRef.current || 'Unknown');
+
+        const currentLine = telnyxNumberRef.current || telnyxNumber;
+        const matchedContact = findContactByPhone(targetNumber);
 
         setCallHistory(prev => {
-          const updated = [newLog, ...prev];
-          localStorage.setItem('call_dialer_history', JSON.stringify(updated));
+          let updated: CallLog[];
+          const existingIdx = activeCallLogIdRef.current 
+            ? prev.findIndex(l => l.id === activeCallLogIdRef.current) 
+            : -1;
+
+          if (existingIdx !== -1) {
+            updated = [...prev];
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              duration: duration || 0,
+              line: currentLine,
+              name: matchedContact?.name || updated[existingIdx].name,
+            };
+          } else {
+            const newLog: CallLog = {
+              id: Math.random().toString(36).substr(2, 9),
+              number: targetNumber,
+              type: logType,
+              timestamp: Date.now(),
+              duration,
+              line: currentLine,
+              name: matchedContact?.name,
+            };
+            updated = [newLog, ...prev];
+          }
+          saveHistoryForNumber(currentLine, updated);
           return updated;
         });
+        activeCallLogIdRef.current = null;
 
         // Notify parent
         if (onCallEnded) {
@@ -1834,7 +2323,9 @@ export default function Dialer({
 
   const clearHistory = () => {
     setCallHistory([]);
-    localStorage.removeItem('call_dialer_history');
+    const currentLine = telnyxNumberRef.current || telnyxNumber;
+    const key = getHistoryKeyForNumber(currentLine);
+    localStorage.removeItem(key);
   };
 
   const formatDuration = (seconds: number) => {
@@ -1843,87 +2334,414 @@ export default function Dialer({
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const formatTime = (ts: number) => {
+  const formatDateTime = (ts: number) => {
     const date = new Date(ts);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+    return `${dateStr}, ${timeStr}`;
   };
 
-  const formatDate = (ts: number) => {
-    const date = new Date(ts);
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
+  const missedCount = callHistory.filter((l) => l.type === 'missed').length;
+  const filteredHistory = historyFilter === 'missed' 
+    ? callHistory.filter((l) => l.type === 'missed') 
+    : callHistory;
+
+  const filteredThreads = smsThreads.filter((thread) => {
+    if (!smsSearchQuery.trim()) return true;
+    const q = smsSearchQuery.toLowerCase().trim();
+    const name = (thread.contact?.name || '').toLowerCase();
+    const phone = (thread.contact?.phoneNumber || '').toLowerCase();
+    const lastMsg = (thread.lastMessage?.text || '').toLowerCase();
+    return name.includes(q) || phone.includes(q) || lastMsg.includes(q);
+  });
+
+  const filteredContacts = contacts.filter((c) => {
+    if (!contactsSearch.trim()) return true;
+    const q = contactsSearch.toLowerCase().trim();
+    return (c.name || '').toLowerCase().includes(q) || (c.phoneNumber || '').includes(q);
+  });
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.18fr_1fr] items-stretch justify-center gap-6 max-w-[1400px] w-full mx-auto p-2 sm:p-4 z-10">
-      {/* CALL HISTORY PANEL (LEFT) */}
+      {/* CALL HISTORY & SAVED CONTACTS PANEL (LEFT) */}
       <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-5 sm:p-7 flex flex-col min-h-[520px]">
-        <div className="flex items-center justify-between mb-4 pb-3 border-b border-zinc-900">
-          <div className="flex items-center gap-2.5">
-            <Clock size={16} className="text-zinc-400" />
-            <h2 className="text-sm font-bold tracking-wider uppercase text-zinc-300 select-none">Recent Calls</h2>
-          </div>
-          {callHistory.length > 0 && (
-            <button 
-              onClick={clearHistory}
-              className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-red-400 transition-colors uppercase font-bold"
+        {/* Panel Header with Tabs */}
+        <div className="flex items-center justify-between mb-3 pb-3 border-b border-zinc-900 gap-2">
+          <div className="flex items-center gap-1 bg-zinc-900/80 p-1 rounded-xl border border-zinc-850 select-none">
+            <button
+              type="button"
+              onClick={() => setLeftPanelTab('recents')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold tracking-wider uppercase transition-all ${
+                leftPanelTab === 'recents'
+                  ? 'bg-zinc-800 text-white shadow-sm'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
             >
-              <Trash2 size={13} /> Clear
+              <Clock size={13} />
+              <span>Recents</span>
+              {callHistory.length > 0 && (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-zinc-700/60 text-zinc-300 ml-0.5">
+                  {callHistory.length}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setLeftPanelTab('contacts')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold tracking-wider uppercase transition-all ${
+                leftPanelTab === 'contacts'
+                  ? 'bg-emerald-500 text-black shadow-sm font-extrabold'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              <Users size={13} />
+              <span>Saved</span>
+              {contacts.length > 0 && (
+                <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ml-0.5 ${
+                  leftPanelTab === 'contacts' ? 'bg-black/25 text-black font-bold' : 'bg-zinc-800 text-zinc-400'
+                }`}>
+                  {contacts.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {leftPanelTab === 'recents' ? (
+            callHistory.length > 0 && (
+              <button 
+                onClick={clearHistory}
+                className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-red-400 transition-colors uppercase font-bold"
+              >
+                <Trash2 size={13} /> Clear
+              </button>
+            )
+          ) : (
+            <button
+              type="button"
+              onClick={() => handleOpenSaveContactModal('', '')}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500 hover:text-black hover:border-emerald-500 text-xs font-semibold transition-all shadow-sm cursor-pointer"
+              title="Add New Contact"
+            >
+              <UserPlus size={13} />
+              <span>+ Add</span>
             </button>
           )}
         </div>
 
-        <div className="flex-grow overflow-y-auto pr-1 space-y-2.5 max-h-[560px] scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent text-zinc-300">
-          {callHistory.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-32 text-zinc-700 select-none">
-              <PhoneCall size={36} className="opacity-15 mb-3" />
-              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">No call logs available</p>
-            </div>
-          ) : (
-            callHistory.map((log) => (
-              <div 
-                key={log.id} 
-                className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-900/20 border border-zinc-900/60 hover:bg-zinc-900/50 hover:border-zinc-800/60 transition-all duration-200 group"
+        {leftPanelTab === 'recents' ? (
+          <>
+            {/* Filter Tabs: All vs Missed */}
+            <div className="flex items-center gap-1.5 mb-3 bg-zinc-900/50 p-1 rounded-xl border border-zinc-900 shrink-0">
+              <button
+                type="button"
+                onClick={() => setHistoryFilter('all')}
+                className={`flex-1 py-1.5 px-3 text-xs font-semibold rounded-lg transition-all ${
+                  historyFilter === 'all'
+                    ? 'bg-zinc-800 text-white shadow-sm'
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
               >
-                <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-xl ${
-                    log.type === 'outgoing' ? 'bg-zinc-900/80 text-zinc-400' :
-                    log.type === 'incoming' ? 'bg-emerald-950/30 text-emerald-400' :
-                    'bg-red-950/30 text-red-400'
+                All {callHistory.length > 0 && `(${callHistory.length})`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryFilter('missed')}
+                className={`flex-1 py-1.5 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                  historyFilter === 'missed'
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                <span>Missed</span>
+                {missedCount > 0 && (
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold leading-none ${
+                    historyFilter === 'missed' ? 'bg-rose-500 text-white' : 'bg-rose-500/25 text-rose-400'
                   }`}>
-                    {log.type === 'outgoing' ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />}
-                  </div>
-                  <div className="text-left">
-                    <p className="text-sm font-bold font-mono text-zinc-200 group-hover:text-white transition-colors">{log.number}</p>
-                    <div className="flex items-center gap-1.5 mt-0.5 text-xs text-zinc-500 font-medium">
-                      <span>{formatDate(log.timestamp)}</span>
-                      <span>•</span>
-                      <span>{formatTime(log.timestamp)}</span>
-                      {log.duration !== undefined && (
-                        <>
-                          <span>•</span>
-                          <span className="font-mono">{formatDuration(log.duration)}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
+                    {missedCount}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <div className="flex-grow overflow-y-auto pr-1 space-y-2 max-h-[560px] scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent text-zinc-300">
+              {filteredHistory.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-28 text-zinc-700 select-none">
+                  {historyFilter === 'missed' ? (
+                    <>
+                      <PhoneMissed size={34} className="opacity-25 mb-3 text-rose-500" />
+                      <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">No missed calls</p>
+                    </>
+                  ) : (
+                    <>
+                      <PhoneCall size={36} className="opacity-15 mb-3" />
+                      <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">No call logs available</p>
+                    </>
+                  )}
                 </div>
-                
-                <button 
-                  onClick={() => {
-                    if (callState === 'idle') {
-                      setPhoneNumber(log.number);
-                    }
-                  }}
-                  className="w-8 h-8 rounded-xl bg-zinc-950 text-zinc-500 hover:bg-emerald-500 hover:text-black hover:scale-105 active:scale-95 transition-all duration-200 border border-zinc-900 flex items-center justify-center shrink-0"
-                  title="Copy to dialer"
-                  disabled={callState !== 'idle'}
+              ) : (
+                filteredHistory.map((log) => {
+                  const isMissed = log.type === 'missed';
+                  const isIncoming = log.type === 'incoming';
+                  const hasDuration = log.duration !== undefined && log.duration > 0;
+                  const matchedContact = findContactByPhone(log.number);
+                  const displayName = matchedContact?.name || log.name;
+
+                  return (
+                    <div 
+                      key={log.id} 
+                      className={`flex items-center justify-between p-3 rounded-2xl transition-all duration-200 group border ${
+                        isMissed 
+                          ? 'bg-rose-950/10 border-rose-900/30 hover:bg-rose-950/25 hover:border-rose-800/40' 
+                          : 'bg-zinc-900/25 border-zinc-900/80 hover:bg-zinc-900/60 hover:border-zinc-800'
+                      }`}
+                    >
+                      {/* Left: Direction Icon + Number & Timestamp */}
+                      <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
+                        <div 
+                          className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 ${
+                            isMissed
+                              ? 'bg-rose-500/15 text-rose-400 border-rose-500/25 shadow-sm shadow-rose-500/10'
+                              : isIncoming
+                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25'
+                              : hasDuration
+                              ? 'bg-purple-500/15 text-purple-400 border-purple-500/25 shadow-sm shadow-purple-500/10'
+                              : 'bg-zinc-800/70 text-zinc-400 border-zinc-700/50'
+                          }`}
+                          title={isMissed ? 'Missed Call' : isIncoming ? 'Incoming Call' : hasDuration ? 'Outgoing Call' : 'Unanswered Call'}
+                        >
+                          {isMissed ? (
+                            <PhoneMissed size={16} className="stroke-[2.2]" />
+                          ) : isIncoming ? (
+                            <PhoneIncoming size={16} className="stroke-[2.2]" />
+                          ) : (
+                            <PhoneOutgoing size={16} className="stroke-[2.2]" />
+                          )}
+                        </div>
+
+                        <div 
+                          onClick={() => {
+                            if (callState === 'idle') {
+                              setPhoneNumber(log.number);
+                            }
+                          }}
+                          className="min-w-0 flex-1 text-left cursor-pointer select-none"
+                          title="Click to select this number"
+                        >
+                          {displayName ? (
+                            <>
+                              <p className={`text-sm font-semibold truncate ${
+                                isMissed ? 'text-rose-200 group-hover:text-rose-100' : 'text-zinc-100 group-hover:text-white'
+                              }`}>
+                                {displayName}
+                              </p>
+                              <p className="text-[11px] font-mono text-zinc-400 truncate">
+                                {formatPhoneNumber(log.number)}
+                              </p>
+                            </>
+                          ) : (
+                            <p className={`text-sm font-semibold font-mono truncate ${
+                              isMissed 
+                                ? 'text-rose-200 group-hover:text-rose-100' 
+                                : 'text-zinc-200 group-hover:text-white'
+                            }`}>
+                              {formatPhoneNumber(log.number)}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-1.5 text-[11px] text-zinc-500 font-medium whitespace-nowrap truncate mt-0.5">
+                            {isMissed && (
+                              <span className="text-rose-400 font-semibold shrink-0">
+                                Missed •
+                              </span>
+                            )}
+                            <span className="truncate">{formatDateTime(log.timestamp)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right: Duration / Status Tag + Call & Save Buttons */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {hasDuration ? (
+                          <span 
+                            className="text-xs font-mono font-medium text-zinc-300 bg-zinc-900/90 px-2 py-1 rounded-lg border border-zinc-800 shrink-0"
+                            title={`Duration: ${formatDuration(log.duration!)}`}
+                          >
+                            {formatDuration(log.duration!)}
+                          </span>
+                        ) : !isMissed ? (
+                          <span className="text-[10px] font-medium text-zinc-500 bg-zinc-900/50 px-1.5 py-0.5 rounded-md border border-zinc-800 shrink-0">
+                            No answer
+                          </span>
+                        ) : null}
+
+                        {/* If not saved, allow saving with 1 click */}
+                        {!matchedContact && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenSaveContactModal(log.number, '');
+                            }}
+                            className="w-8 h-8 rounded-xl bg-zinc-950 border border-zinc-900 text-zinc-500 hover:text-emerald-400 hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center shrink-0 cursor-pointer"
+                            title="Save this number to Contacts"
+                          >
+                            <UserPlus size={12} />
+                          </button>
+                        )}
+
+                        <button 
+                          onClick={() => {
+                            if (callState === 'idle') {
+                              setPhoneNumber(log.number);
+                            }
+                          }}
+                          className={`w-8 h-8 rounded-xl bg-zinc-950 border transition-all duration-200 flex items-center justify-center shrink-0 ${
+                            isMissed
+                              ? 'text-rose-400/80 border-rose-950/40 hover:bg-rose-500 hover:text-white hover:border-rose-500 hover:scale-105 active:scale-95'
+                              : 'text-zinc-500 border-zinc-900 hover:bg-emerald-500 hover:text-black hover:border-emerald-500 hover:scale-105 active:scale-95'
+                          }`}
+                          title={isMissed ? 'Call back missed call' : 'Copy to dialer'}
+                          disabled={callState !== 'idle'}
+                        >
+                          <Phone size={12} />
+                        </button>
+
+                        <button 
+                          type="button"
+                          onClick={() => openChatWithNumber(log.number, displayName)}
+                          className="w-8 h-8 rounded-xl bg-zinc-950 border border-zinc-900 text-zinc-500 hover:bg-emerald-500 hover:text-black hover:border-emerald-500 hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center shrink-0"
+                          title="Send SMS"
+                        >
+                          <MessageSquare size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </>
+        ) : (
+          /* SAVED NUMBERS / CONTACTS VIEW */
+          <div className="flex flex-col flex-grow min-h-0">
+            {/* Search Bar for Saved Contacts */}
+            <div className="relative mb-3">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <input
+                type="text"
+                value={contactsSearch}
+                onChange={(e) => setContactsSearch(e.target.value)}
+                placeholder="Search saved contacts..."
+                className="w-full pl-9 pr-8 py-2 bg-zinc-900/60 border border-zinc-850 rounded-xl text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500/50"
+              />
+              {contactsSearch && (
+                <button
+                  type="button"
+                  onClick={() => setContactsSearch('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
                 >
-                  <Phone size={12} />
+                  <X size={13} />
                 </button>
-              </div>
-            ))
-          )}
-        </div>
+              )}
+            </div>
+
+            {/* Contacts List */}
+            <div className="flex-grow overflow-y-auto pr-1 space-y-2 max-h-[560px] scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent text-zinc-300">
+              {filteredContacts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-24 text-zinc-700 select-none">
+                  <Users size={36} className="opacity-20 mb-3 text-emerald-500" />
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                    {contactsSearch ? 'No matching contacts' : 'No saved numbers yet'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenSaveContactModal('', '')}
+                    className="mt-3 text-xs text-emerald-400 hover:underline font-semibold cursor-pointer"
+                  >
+                    + Save your first contact
+                  </button>
+                </div>
+              ) : (
+                filteredContacts.map((contact) => {
+                  const initials = contact.name.trim().slice(0, 2).toUpperCase() || '#';
+                  return (
+                    <div
+                      key={contact.id || contact.phoneNumber}
+                      className="flex items-center justify-between p-3 rounded-2xl transition-all duration-200 group border bg-zinc-900/30 border-zinc-900/80 hover:bg-zinc-900/60 hover:border-zinc-800"
+                    >
+                      {/* Left: Avatar + Name & Phone */}
+                      <div 
+                        onClick={() => {
+                          if (callState === 'idle') {
+                            setPhoneNumber(contact.phoneNumber);
+                          }
+                        }}
+                        className="flex items-center gap-3 min-w-0 flex-1 mr-2 cursor-pointer"
+                        title="Click to select this number"
+                      >
+                        <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-xs font-bold text-emerald-400 shrink-0">
+                          {initials}
+                        </div>
+                        <div className="min-w-0 flex-1 text-left select-none">
+                          <p className="text-sm font-semibold text-zinc-100 group-hover:text-white truncate">
+                            {contact.name}
+                          </p>
+                          <p className="text-[11px] font-mono text-zinc-400 truncate mt-0.5">
+                            {formatPhoneNumber(contact.phoneNumber)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Right: Actions */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => {
+                            if (callState === 'idle') {
+                              setPhoneNumber(contact.phoneNumber);
+                            }
+                          }}
+                          className="w-8 h-8 rounded-xl bg-zinc-950 border border-zinc-900 text-zinc-500 hover:bg-emerald-500 hover:text-black hover:border-emerald-500 hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center shrink-0 cursor-pointer"
+                          title="Load into dialer"
+                          disabled={callState !== 'idle'}
+                        >
+                          <Phone size={12} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => openChatWithNumber(contact.phoneNumber, contact.name, contact.id)}
+                          className="w-8 h-8 rounded-xl bg-zinc-950 border border-zinc-900 text-zinc-500 hover:bg-emerald-500 hover:text-black hover:border-emerald-500 hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center shrink-0 cursor-pointer"
+                          title="Send SMS"
+                        >
+                          <MessageSquare size={12} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenSaveContactModal(contact.phoneNumber, contact.name, contact.id)}
+                          className="w-8 h-8 rounded-xl bg-zinc-950 border border-zinc-900 text-zinc-600 hover:text-zinc-200 hover:bg-zinc-800 transition-all duration-200 flex items-center justify-center shrink-0 cursor-pointer"
+                          title="Edit Contact"
+                        >
+                          <Edit2 size={12} />
+                        </button>
+
+                        {contact.id && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteContact(contact.id!)}
+                            className="w-8 h-8 rounded-xl bg-zinc-950 border border-zinc-900 text-zinc-600 hover:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 transition-all duration-200 flex items-center justify-center shrink-0 cursor-pointer"
+                            title="Delete Contact"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* DIALER PANEL (MIDDLE) */}
@@ -1933,57 +2751,84 @@ export default function Dialer({
         <div className="absolute top-[-20%] left-[-20%] w-[140%] h-[140%] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-zinc-800/5 via-transparent to-transparent pointer-events-none" />
 
         {/* Dialer Header */}
-        <div className="flex items-center justify-between mb-5 pb-3 border-b border-zinc-900 z-10">
-          <div className="flex items-center gap-2">
-            <span className={`relative flex h-2 w-2 rounded-full`}>
-              {sipState === 'connected' && (
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              )}
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${
-                sipState === 'connected' ? 'bg-emerald-500' :
-                sipState === 'connecting' ? 'bg-amber-500' :
-                sipState === 'error' ? 'bg-red-500' : 'bg-zinc-600'
-              }`}></span>
-            </span>
-            <span className="text-xs font-bold tracking-wider text-zinc-400 uppercase select-none">
-              {sipState === 'connected' ? 'Line Connected' : sipState === 'connecting' ? 'Connecting...' : 'Offline'}
-            </span>
+        <div className="flex items-center justify-between mb-5 pb-3 border-b border-zinc-900 z-10 gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className={`relative flex h-2 w-2 rounded-full`}>
+                {sipState === 'connected' && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                )}
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${
+                  sipState === 'connected' ? 'bg-emerald-500' :
+                  sipState === 'connecting' ? 'bg-amber-500' :
+                  sipState === 'error' ? 'bg-red-500' : 'bg-zinc-600'
+                }`}></span>
+              </span>
+              <span className="text-xs font-bold tracking-wider text-zinc-400 uppercase select-none">
+                {sipState === 'connected' ? 'Line Connected' : sipState === 'connecting' ? 'Connecting...' : 'Offline'}
+              </span>
+            </div>
+
+            {telnyxNumber && (
+              <div className="relative inline-flex items-center">
+                {availableNumbers.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowNumberDropdown((v) => !v)}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-zinc-900/90 border border-zinc-800 hover:border-zinc-700 text-zinc-100 hover:text-emerald-400 font-mono text-sm sm:text-base font-bold tracking-tight transition-all cursor-pointer shadow-sm group"
+                    title="Click to switch line"
+                  >
+                    <span>{telnyxNumber}</span>
+                    <ChevronDown size={14} className="text-zinc-500 group-hover:text-emerald-400 transition-colors" />
+                  </button>
+                ) : (
+                  <span className="px-3 py-1 rounded-lg bg-zinc-900/90 border border-zinc-800/80 text-zinc-100 font-mono text-sm sm:text-base font-bold tracking-tight shadow-sm">
+                    {telnyxNumber}
+                  </span>
+                )}
+
+                {/* Dropdown when multiple numbers exist */}
+                {showNumberDropdown && availableNumbers.length > 1 && (
+                  <>
+                    <div 
+                      className="fixed inset-0 z-40" 
+                      onClick={() => setShowNumberDropdown(false)} 
+                    />
+                    <div className="absolute top-full mt-2 left-0 z-50 min-w-[220px] p-1.5 rounded-xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-1">
+                      <div className="px-2 py-1 text-[9px] uppercase font-bold text-zinc-500 tracking-wider">
+                        Switch Active Line
+                      </div>
+                      {availableNumbers.map((num) => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => {
+                            switchActiveNumber(num);
+                            setShowNumberDropdown(false);
+                          }}
+                          className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-mono transition-all text-left ${
+                            telnyxNumber === num
+                              ? 'bg-emerald-500/15 text-emerald-300 font-bold border border-emerald-500/25'
+                              : 'text-zinc-400 hover:text-white hover:bg-zinc-900 border border-transparent'
+                          }`}
+                        >
+                          <span>{num}</span>
+                          {telnyxNumber === num && (
+                            <span className="text-[9px] uppercase tracking-wider text-emerald-400 bg-emerald-500/20 px-1.5 py-0.5 rounded font-sans font-bold">
+                              Active
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Header Icons Container */}
           <div className="flex items-center gap-2.5">
-            {/* 4-Ring Guard Quick Toggle */}
-            <button
-              onClick={() => {
-                const nextVal = !autoDropEnabled;
-                setAutoDropEnabled(nextVal);
-                localStorage.setItem('telnyx_auto_4_ring', String(nextVal));
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[10px] font-bold uppercase tracking-wider transition-all duration-200 select-none ${
-                autoDropEnabled
-                  ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]'
-                  : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
-              }`}
-              title={autoDropEnabled ? `4-Ring Free Guard: Active (${autoDropMaxRings} rings / ${autoDropMaxRings * 4.5}s max)` : '4-Ring Free Guard: Disabled'}
-            >
-              <Shield size={12} className={autoDropEnabled ? 'text-emerald-400' : 'text-zinc-500'} />
-              <span>4-Ring Guard {autoDropEnabled ? 'ON' : 'OFF'}</span>
-            </button>
-
-            {/* Call Script Toggle */}
-            {onScriptToggle && (
-              <button
-                onClick={onScriptToggle}
-                className={`p-2 rounded-full border transition-all duration-200 ${
-                  scriptOpen
-                    ? 'bg-zinc-800 border-zinc-700 text-zinc-100'
-                    : 'bg-zinc-900/40 border-zinc-900/80 text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="Call Script"
-              >
-                <FileText size={15} />
-              </button>
-            )}
             {/* Toggle Settings Icon */}
             <button 
               onClick={toggleSettings}
@@ -2113,10 +2958,79 @@ export default function Dialer({
                 </div>
               </div>
 
-              {/* Information / Caller ID info */}
-              <div className="p-3.5 bg-zinc-900/30 border border-zinc-900 rounded-xl space-y-1">
-                <div className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">SIP Caller ID Info</div>
-                <div className="text-xs text-zinc-400 break-all">Caller ID Number: {telnyxNumber || 'None'}</div>
+              {/* Outbound Phone Numbers (Lines) Manager */}
+              <div className="p-3.5 bg-zinc-900/30 border border-zinc-900 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">
+                    Outbound Phone Numbers (Lines)
+                  </div>
+                  <span className="text-[10px] text-zinc-500 font-mono">
+                    {availableNumbers.length} {availableNumbers.length === 1 ? 'line' : 'lines'}
+                  </span>
+                </div>
+
+                {/* List of Numbers */}
+                <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                  {availableNumbers.map((num) => (
+                    <div 
+                      key={num}
+                      onClick={() => switchActiveNumber(num)}
+                      className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
+                        telnyxNumber === num
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 font-bold'
+                          : 'bg-zinc-950/60 border-zinc-900 text-zinc-400 hover:text-zinc-200 hover:border-zinc-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-mono">
+                        <span className={`w-2 h-2 rounded-full ${telnyxNumber === num ? 'bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.5)]' : 'bg-zinc-700'}`} />
+                        <span>{num}</span>
+                        {telnyxNumber === num && (
+                          <span className="text-[9px] uppercase tracking-wider text-emerald-400 bg-emerald-500/20 px-1.5 py-0.5 rounded font-sans font-bold">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      {availableNumbers.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveNumber(num);
+                          }}
+                          className="text-zinc-600 hover:text-red-400 p-1 transition-colors"
+                          title="Remove line"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add new number input */}
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="text"
+                    placeholder="Add new number (+1...)"
+                    value={newNumberInput}
+                    onChange={(e) => setNewNumberInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddNumber(newNumberInput);
+                      }
+                    }}
+                    className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddNumber(newNumberInput)}
+                    disabled={!newNumberInput.trim()}
+                    className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-emerald-500 hover:text-black text-xs font-semibold text-zinc-300 transition-all disabled:opacity-40 disabled:hover:bg-zinc-800 disabled:hover:text-zinc-300 flex items-center gap-1"
+                  >
+                    <Plus size={11} /> Add
+                  </button>
+                </div>
               </div>
 
               {/* Voice Processing toggles (AEC, ANS, AGC) */}
@@ -2290,15 +3204,29 @@ export default function Dialer({
                 </div>
               )}
 
-              {/* Outbound tag */}
-              {callState === 'idle' && (
-                <div className="text-xs font-semibold tracking-wider text-zinc-500 uppercase mb-1">
-                  {activeLead
-                    ? <span className="text-[#00c896]">Next: {activeLead.firstName} {activeLead.lastName}</span>
-                    : `Outbound Caller: ${telnyxNumber || 'Not configured'}`
-                  }
+              {/* Outbound Caller Display (Next lead if available) */}
+              {callState === 'idle' && activeLead && (
+                <div className="flex items-center justify-center gap-1.5 text-xs font-mono text-zinc-500 mb-1 select-none">
+                  <span className="text-[#00c896] font-sans font-semibold tracking-wide">
+                    Next: {activeLead.firstName} {activeLead.lastName}
+                  </span>
                 </div>
               )}
+
+              {/* Saved Contact Name during active call */}
+              {callState !== 'idle' && !activeLead && (() => {
+                const target = currentCall?.destinationNumber || currentCall?.callerNumber || phoneNumber;
+                const matched = findContactByPhone(target);
+                if (matched) {
+                  return (
+                    <div className="mb-1 flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold animate-in fade-in">
+                      <User size={12} className="text-emerald-400" />
+                      <span>{matched.name}</span>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
 
               {/* Dynamic Status message */}
               {callState !== 'idle' && (
@@ -2391,7 +3319,21 @@ export default function Dialer({
               )}
 
               {/* Interactive display field */}
-              <div className="relative w-full flex items-center justify-center px-2 py-1">
+              <div className="relative w-full flex flex-col items-center justify-center px-2 py-1">
+                {/* Saved Contact Name Badge above input */}
+                {callState === 'idle' && (() => {
+                  const matched = findContactByPhone(phoneNumber);
+                  if (matched) {
+                    return (
+                      <div className="flex items-center gap-1.5 px-3 py-1 mb-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold animate-in fade-in duration-150">
+                        <User size={13} className="text-emerald-400" />
+                        <span>{matched.name}</span>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+
                 <input
                   type="text"
                   value={formatPhoneNumber(phoneNumber)}
@@ -2409,6 +3351,40 @@ export default function Dialer({
                   disabled={callState !== 'idle'}
                   className="w-full bg-transparent border-none outline-none text-center text-3xl sm:text-4xl font-bold font-mono text-zinc-100 placeholder-zinc-800 tracking-wide select-all focus:ring-0 focus:outline-none"
                 />
+
+                {/* Quick Chat Pill & Save Contact Button when number is typed */}
+                {callState === 'idle' && phoneNumber.trim().length >= 7 && (
+                  <div className="flex items-center justify-center gap-2 mt-1 mb-1 animate-in fade-in duration-150 flex-wrap">
+                    {(() => {
+                      const matched = findContactByPhone(phoneNumber);
+                      return (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openChatWithNumber(phoneNumber, matched?.name, matched?.id)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-black border border-emerald-500/25 hover:border-emerald-500 text-xs font-semibold transition-all duration-150 shadow-sm cursor-pointer"
+                            title={`Select ${matched ? matched.name : formatPhoneNumber(phoneNumber)} to chat`}
+                          >
+                            <MessageSquare size={12} />
+                            <span>Chat with {matched ? matched.name : formatPhoneNumber(phoneNumber)}</span>
+                          </button>
+
+                          {!matched && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSaveContactModal(phoneNumber, '')}
+                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 hover:border-zinc-700 text-xs font-semibold transition-all duration-150 shadow-sm cursor-pointer"
+                              title="Save this number to Contacts"
+                            >
+                              <UserPlus size={12} className="text-emerald-400" />
+                              <span>Save Contact</span>
+                            </button>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
 
               {/* VM Dropping Banner */}
@@ -2507,11 +3483,12 @@ export default function Dialer({
                 ) : (
                   callState === 'idle' && phoneNumber && (
                     <button 
-                      onClick={handleClear}
-                      className="w-11 h-11 rounded-full bg-zinc-950 hover:bg-zinc-900 border border-zinc-900 flex items-center justify-center text-zinc-500 hover:text-zinc-200 transition-all"
-                      title="Clear display"
+                      type="button"
+                      onClick={() => openChatWithNumber(phoneNumber)}
+                      className="w-11 h-11 rounded-full bg-emerald-500/15 hover:bg-emerald-500 hover:text-black border border-emerald-500/30 flex items-center justify-center text-emerald-400 hover:scale-105 active:scale-95 transition-all duration-200 shadow-sm cursor-pointer"
+                      title="Select this number to chat"
                     >
-                      <RotateCcw size={15} />
+                      <MessageSquare size={17} />
                     </button>
                   )
                 )}
@@ -2617,58 +3594,262 @@ export default function Dialer({
         )}
       </div>
 
-      {/* QUICK SMS PANEL (RIGHT) */}
-      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-5 sm:p-7 flex flex-col min-h-[520px] h-full justify-between overflow-hidden">
+      {/* SMS PANEL (RIGHT) */}
+      <div className="w-full bg-zinc-950/80 backdrop-blur-xl border border-zinc-900 shadow-2xl rounded-[2rem] p-4 sm:p-6 flex flex-col min-h-[540px] h-full justify-between overflow-hidden relative">
         <div className="flex flex-col h-full flex-grow min-h-0">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-2 pb-2 border-b border-zinc-900 select-none">
-            <div className="flex items-center gap-2.5">
-              <MessageSquare size={16} className="text-emerald-400" />
-              <h2 className="text-sm font-bold tracking-wider uppercase text-zinc-300">Quick SMS</h2>
-            </div>
-            
-            {/* Active Phone Indicator */}
-            {(activeLead?.phone || phoneNumber) ? (
-              <span className="text-xs font-mono font-semibold text-zinc-300 bg-zinc-900 px-3 py-1 rounded-full border border-zinc-800">
-                {activeLead?.phone || phoneNumber}
-              </span>
-            ) : (
-              <span className="text-[10px] font-bold text-zinc-500 bg-zinc-900/50 px-2.5 py-1 rounded-full uppercase tracking-wider">
-                Idle
-              </span>
-            )}
-          </div>
+          {smsView === 'inbox' ? (
+            /* ===== INBOX VIEW (Threads List) ===== */
+            <div className="flex flex-col h-full flex-grow min-h-0">
+              {/* Inbox Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-zinc-900 select-none">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400">
+                    <MessageSquare size={16} />
+                  </div>
+                  <h2 className="text-xs font-bold tracking-wider uppercase text-zinc-200">SMS Inbox</h2>
+                </div>
 
-          {/* Sender SMS Number */}
-          {telnyxSmsNumber && (
-            <div className="text-[10px] font-semibold text-zinc-500 mb-3 pb-1 border-b border-zinc-900/60 select-none flex items-center justify-between">
-              <span>Sending from:</span>
-              <span className="font-mono text-zinc-400">{telnyxSmsNumber}</span>
-            </div>
-          )}
-
-          {/* Target number block check */}
-          {!(activeLead?.phone || phoneNumber) ? (
-            /* NO NUMBER IN QUEUE STATE */
-            <div className="flex-grow flex flex-col items-center justify-center text-center p-6 select-none my-auto">
-              <div className="w-14 h-14 rounded-full bg-zinc-900 border border-zinc-850 flex items-center justify-center mb-3.5 text-zinc-600 shadow-inner">
-                <MessageSquare size={24} />
+                {/* New Chat Toggle Button */}
+                <button
+                  type="button"
+                  onClick={() => setShowNewChatInput(v => !v)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                    showNewChatInput
+                      ? 'bg-zinc-800 border-zinc-700 text-white shadow-sm'
+                      : 'bg-zinc-900/80 border-zinc-800 text-zinc-300 hover:bg-emerald-500 hover:text-black hover:border-emerald-500'
+                  }`}
+                  title="Compose new message"
+                >
+                  <Plus size={13} />
+                  <span>New</span>
+                </button>
               </div>
-              <p className="text-sm font-bold text-zinc-300 uppercase tracking-wide">No Active Number</p>
-              <p className="text-xs text-zinc-500 max-w-[16rem] mt-1.5 leading-relaxed">
-                Select a lead from your queue or enter a number in the dialpad to start texting.
-              </p>
+
+              {/* Quick Compose New Chat Bar (When Toggled) */}
+              {showNewChatInput && (
+                <div className="mt-3 p-3.5 rounded-2xl bg-zinc-900/40 border border-zinc-850 space-y-2.5 select-none">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Start Conversation</span>
+                    <button 
+                      type="button"
+                      onClick={() => setShowNewChatInput(false)}
+                      className="text-zinc-500 hover:text-zinc-300 p-1"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Recipient number (e.g. +1...)"
+                      value={newChatNumber}
+                      onChange={(e) => setNewChatNumber(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (newChatNumber.trim()) openChatWithNumber(newChatNumber.trim());
+                        }
+                      }}
+                      className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (newChatNumber.trim()) openChatWithNumber(newChatNumber.trim());
+                      }}
+                      disabled={!newChatNumber.trim()}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-500 text-black font-semibold text-xs hover:bg-emerald-400 disabled:opacity-40 disabled:hover:bg-emerald-500 transition-all flex items-center gap-1"
+                    >
+                      <span>Chat</span>
+                    </button>
+                  </div>
+                  {/* Quick suggestion if number in dialpad */}
+                  {phoneNumber && phoneNumber !== newChatNumber && (
+                    <button
+                      type="button"
+                      onClick={() => setNewChatNumber(phoneNumber)}
+                      className="text-[10px] font-mono text-zinc-400 hover:text-emerald-400 transition-colors flex items-center gap-1"
+                    >
+                      <span>Use dialpad number:</span>
+                      <span className="text-emerald-400 font-bold">{phoneNumber}</span>
+                    </button>
+                  )}
+
+                  {/* Select recent caller to chat pills */}
+                  {callHistory.length > 0 && (
+                    <div className="pt-2 border-t border-zinc-850/80">
+                      <span className="text-[9px] uppercase font-bold text-zinc-500 tracking-wider block mb-1.5">
+                        Select recent caller to chat:
+                      </span>
+                      <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-0.5">
+                        {Array.from(new Set(callHistory.map(l => l.number))).slice(0, 6).map((num) => (
+                          <button
+                            key={num}
+                            type="button"
+                            onClick={() => openChatWithNumber(num)}
+                            className="px-2 py-1 rounded-lg bg-zinc-950 border border-zinc-850 hover:border-emerald-500/50 text-[10px] font-mono text-zinc-300 hover:text-emerald-300 transition-all flex items-center gap-1 cursor-pointer"
+                            title={`Chat with ${num}`}
+                          >
+                            <MessageSquare size={10} className="text-emerald-400" />
+                            <span>{num}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Search Bar */}
+              <div className="my-3 relative">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                <input
+                  type="text"
+                  placeholder="Search conversations..."
+                  value={smsSearchQuery}
+                  onChange={(e) => setSmsSearchQuery(e.target.value)}
+                  className="w-full bg-zinc-900/30 border border-zinc-850 rounded-xl pl-8 pr-3 py-2 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-700 transition-colors"
+                />
+              </div>
+
+              {/* Conversation Threads Feed */}
+              <div className="flex-grow overflow-y-auto space-y-1.5 pr-1 max-h-[460px] scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+                {loadingThreads ? (
+                  <div className="space-y-2 py-3">
+                    {[1, 2, 3].map(i => (
+                      <div key={i} className="p-3 rounded-2xl bg-zinc-900/20 border border-zinc-900/60 animate-pulse flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-zinc-900 shrink-0" />
+                        <div className="flex-1 space-y-1.5">
+                          <div className="h-3 w-28 bg-zinc-900 rounded" />
+                          <div className="h-2 w-44 bg-zinc-900/60 rounded" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : filteredThreads.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center p-6 select-none my-auto">
+                    <div className="w-13 h-13 rounded-full bg-zinc-900/80 border border-zinc-850 flex items-center justify-center mb-3 text-zinc-600 shadow-inner">
+                      <MessageSquare size={22} />
+                    </div>
+                    <p className="text-xs font-bold text-zinc-300 uppercase tracking-wider">No conversations on this line</p>
+                    <p className="text-[11px] text-zinc-500 max-w-[15rem] mt-1.5 leading-relaxed">
+                      Line <span className="font-mono text-zinc-400">{telnyxNumber || 'selected'}</span> has no SMS history yet. Click <span className="text-emerald-400 font-semibold">+ New</span> above or text any caller.
+                    </p>
+                  </div>
+                ) : (
+                  filteredThreads.map((thread) => {
+                    const contactName = thread.contact?.name || thread.contact?.phoneNumber || 'Contact';
+                    const contactPhone = thread.contact?.phoneNumber || '';
+                    const lastMsg = thread.lastMessage;
+                    const isOutbound = lastMsg?.direction === 'outbound';
+                    const unread = (thread.unreadCount || 0) > 0;
+
+                    return (
+                      <button
+                        key={thread.contact?.id || contactPhone}
+                        type="button"
+                        onClick={() => openChatWithNumber(contactPhone, thread.contact?.name, thread.contact?.id)}
+                        className={`w-full flex items-center justify-between p-3 rounded-2xl border text-left transition-all group ${
+                          unread
+                            ? 'bg-emerald-950/20 border-emerald-800/40 hover:bg-emerald-950/30'
+                            : 'bg-zinc-900/20 border-zinc-900/80 hover:bg-zinc-900/60 hover:border-zinc-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
+                          {/* Avatar */}
+                          <div className="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-xs font-bold text-zinc-300 shrink-0 group-hover:border-zinc-700 transition-colors">
+                            {contactName.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase() || '#'}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between">
+                              <p className={`text-xs font-semibold truncate ${unread ? 'text-emerald-300 font-bold' : 'text-zinc-200 group-hover:text-white'}`}>
+                                {contactName}
+                              </p>
+                              {lastMsg?.timestamp && (
+                                <span className="text-[10px] text-zinc-500 whitespace-nowrap ml-1 shrink-0">
+                                  {formatRelativeTime(lastMsg.timestamp)}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center justify-between mt-0.5">
+                              <p className="text-[11px] text-zinc-500 truncate max-w-[170px]">
+                                {isOutbound && <span className="text-zinc-400">You: </span>}
+                                {lastMsg?.text || 'No messages'}
+                              </p>
+                              {unread && (
+                                <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500 text-black leading-none shrink-0">
+                                  {thread.unreadCount}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
           ) : (
-            /* SMS WORKSPACE STATE */
-            <div className="flex flex-col flex-grow min-h-0 h-full">
-              {/* Message Feed */}
-              <div className="flex-grow overflow-y-auto space-y-3 pr-1 pb-4 scrollbar-thin scrollbar-thumb-zinc-900 scrollbar-track-transparent min-h-[260px] max-h-[500px]">
-                {smsMessages.length === 0 ? (
+            /* ===== ACTIVE CHAT VIEW ===== */
+            <div className="flex flex-col h-full flex-grow min-h-0">
+              {/* Chat Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-zinc-900 select-none">
+                <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSmsView('inbox');
+                      setActiveSmsContact(null);
+                      loadThreadsForLine(telnyxNumberRef.current);
+                    }}
+                    className="p-1.5 rounded-xl bg-zinc-900 border border-zinc-850 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all shrink-0 flex items-center gap-1 text-xs"
+                    title="Back to Inbox"
+                  >
+                    <ArrowLeft size={14} />
+                    <span className="font-semibold">Inbox</span>
+                  </button>
+
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-xs font-bold text-zinc-200 truncate">
+                      {activeSmsContact?.name || activeSmsContact?.phoneNumber}
+                    </h3>
+                    <p className="text-[10px] font-mono text-zinc-500 truncate">
+                      {activeSmsContact?.phoneNumber} • <span className="text-emerald-400">via {telnyxNumber || 'line'}</span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Quick Call Action */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (activeSmsContact?.phoneNumber) {
+                      setPhoneNumber(activeSmsContact.phoneNumber);
+                      handleCall();
+                    }
+                  }}
+                  disabled={callState !== 'idle'}
+                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-emerald-400 hover:border-emerald-500/40 transition-all shrink-0 disabled:opacity-40"
+                  title="Call this number"
+                >
+                  <Phone size={13} />
+                </button>
+              </div>
+
+              {/* Message Bubble Stream */}
+              <div className="flex-grow overflow-y-auto space-y-3 pr-1 py-3 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent min-h-[260px] max-h-[460px]">
+                {loadingSmsMessages ? (
+                  <div className="h-full flex items-center justify-center text-zinc-500 py-12">
+                    <Loader2 size={20} className="animate-spin text-emerald-400 mr-2" />
+                    <span className="text-xs">Loading messages...</span>
+                  </div>
+                ) : smsMessages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center p-6 select-none my-auto">
-                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">No message history</p>
+                    <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">No message history</p>
                     <p className="text-[11px] text-zinc-600 mt-1 max-w-[14rem] leading-relaxed">
-                      Type below to send your first message to this contact.
+                      Send your first text to {activeSmsContact?.name || activeSmsContact?.phoneNumber} from line {telnyxNumber}.
                     </p>
                   </div>
                 ) : (
@@ -2676,13 +3857,13 @@ export default function Dialer({
                     const isOutbound = msg.direction === 'outbound';
                     return (
                       <div
-                        key={msg.id}
+                        key={msg.id || msg.telnyxMessageId || Math.random()}
                         className={`flex flex-col ${isOutbound ? 'items-end' : 'items-start'}`}
                       >
                         <div
-                          className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed select-text ${
+                          className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed select-text ${
                             isOutbound
-                              ? 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-100 rounded-tr-none'
+                              ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-100 rounded-tr-none'
                               : 'bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-tl-none'
                           }`}
                         >
@@ -2690,15 +3871,16 @@ export default function Dialer({
                         </div>
                         <div className="flex items-center gap-1.5 mt-1 px-1.5 text-[9px] font-bold text-zinc-500 select-none uppercase tracking-wider">
                           <span>
-                            {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {new Date(msg.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                           </span>
                           {isOutbound && (
                             <>
                               <span>•</span>
                               <span className={
-                                msg.status === 'delivered' ? 'text-emerald-400' :
+                                msg.status === 'delivered' ? 'text-emerald-400 flex items-center gap-0.5' :
                                 msg.status === 'failed' ? 'text-red-400' : 'text-zinc-500'
                               }>
+                                {msg.status === 'delivered' && <CheckCheck size={10} />}
                                 {msg.status}
                               </span>
                             </>
@@ -2711,33 +3893,17 @@ export default function Dialer({
                 <div ref={messageEndRef} />
               </div>
 
-              {/* Input Form & Template Selector */}
-              <form onSubmit={handleSendSms} className="pt-2.5 border-t border-zinc-900 mt-auto select-none">
-                {/* Template Selector dropdown */}
-                {smsTemplates.length > 0 && (
-                  <div className="mb-2.5">
-                    <select
-                      value={selectedTemplateId}
-                      onChange={(e) => handleTemplateChange(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-900 rounded-xl px-3 py-2 text-xs font-bold text-zinc-300 focus:outline-none focus:border-zinc-800 transition-colors uppercase tracking-wider cursor-pointer"
-                    >
-                      <option value="">-- Use a template --</option>
-                      {smsTemplates.map(t => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
+              {/* Input Form */}
+              <form onSubmit={handleSendSms} className="pt-2 border-t border-zinc-900 mt-auto select-none">
                 {/* Input text + send button */}
-                <div className="flex gap-2 items-center bg-zinc-950 border border-zinc-900 rounded-2xl p-2 focus-within:border-zinc-800 transition-colors">
+                <div className="flex gap-2 items-center bg-zinc-950 border border-zinc-850 rounded-2xl p-2 focus-within:border-zinc-700 transition-colors">
                   <textarea
                     ref={textareaRef}
                     rows={1}
                     value={smsInput}
                     onChange={(e) => setSmsInput(e.target.value)}
-                    placeholder="Type a message..."
-                    className="flex-grow bg-transparent border-0 resize-none px-2.5 py-1 text-sm text-zinc-100 placeholder-zinc-500 focus:ring-0 focus:outline-none scrollbar-none max-h-[140px]"
+                    placeholder={`Message ${activeSmsContact?.name || activeSmsContact?.phoneNumber || ''}...`}
+                    className="flex-grow bg-transparent border-0 resize-none px-2.5 py-1 text-xs text-zinc-100 placeholder-zinc-500 focus:ring-0 focus:outline-none scrollbar-none max-h-[140px]"
                     style={{ height: 'auto', minHeight: '28px' }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
@@ -2749,14 +3915,18 @@ export default function Dialer({
                   <button
                     type="submit"
                     disabled={isSendingSms || !smsInput.trim()}
-                    className="w-9 h-9 rounded-xl bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 disabled:bg-zinc-900 disabled:text-zinc-700 transition-all flex items-center justify-center flex-shrink-0 cursor-pointer shadow-sm"
+                    className="w-9 h-9 rounded-xl bg-emerald-500 text-black hover:bg-emerald-400 active:scale-95 disabled:bg-zinc-900 disabled:text-zinc-700 transition-all flex items-center justify-center shrink-0 cursor-pointer shadow-sm"
+                    title="Send message (Enter)"
                   >
                     {isSendingSms ? (
-                      <Loader2 size={15} className="animate-spin" />
+                      <Loader2 size={14} className="animate-spin" />
                     ) : (
-                      <Send size={15} fill="currentColor" />
+                      <Send size={14} fill="currentColor" />
                     )}
                   </button>
+                </div>
+                <div className="text-[9px] text-zinc-600 mt-1 text-center font-medium">
+                  Press Enter to send • Sending from {telnyxNumber || telnyxSmsNumber || 'line'}
                 </div>
               </form>
             </div>
@@ -2766,6 +3936,85 @@ export default function Dialer({
 
       {/* Dynamic native audio output for remote voice */}
       <audio ref={audioRef} id="remote-audio" autoPlay className="hidden" />
+
+      {/* SAVE / EDIT CONTACT MODAL */}
+      {showContactModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-zinc-950 border border-zinc-850 rounded-[2rem] p-6 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-4 mb-4 border-b border-zinc-900">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400">
+                  <UserPlus size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-zinc-100">
+                    {contactModalId ? 'Edit Saved Contact' : 'Save Contact'}
+                  </h3>
+                  <p className="text-[11px] text-zinc-500">
+                    Saved numbers sync across dialer, history, and SMS
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowContactModal(false)}
+                className="p-2 rounded-xl text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveContactSubmit} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Contact Name <span className="text-emerald-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={contactModalName}
+                  onChange={(e) => setContactModalName(e.target.value)}
+                  placeholder="e.g. Alice Smith / Office"
+                  className="w-full px-3.5 py-2.5 bg-zinc-900/80 border border-zinc-850 rounded-xl text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/60 focus:ring-1 focus:ring-emerald-500/60"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Phone Number <span className="text-emerald-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={contactModalPhone}
+                  onChange={(e) => setContactModalPhone(e.target.value)}
+                  placeholder="+1 (555) 000-0000"
+                  className="w-full px-3.5 py-2.5 bg-zinc-900/80 border border-zinc-850 rounded-xl text-sm font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/60 focus:ring-1 focus:ring-emerald-500/60"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowContactModal(false)}
+                  className="px-4 py-2.5 rounded-xl border border-zinc-850 text-xs font-semibold text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingContact || !contactModalName.trim() || !contactModalPhone.trim()}
+                  className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black text-xs font-bold shadow-lg shadow-emerald-500/20 transition-all active:scale-95 cursor-pointer"
+                >
+                  {isSavingContact && <Loader2 size={13} className="animate-spin" />}
+                  <span>{contactModalId ? 'Update Contact' : 'Save Contact'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   PhoneCall, TrendingUp, Phone, Voicemail, ThumbsUp,
-  Users, Layers, ChevronLeft, ChevronRight, X
+  ChevronLeft, ChevronRight, X
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import LeadQueue from '@/components/LeadQueue';
@@ -270,32 +270,6 @@ export default function Home() {
               </div>
             );
           })}
-
-          {/* Panel toggle buttons inside stat bar */}
-          <div className="flex items-center gap-2.5 ml-auto shrink-0">
-            <button
-              onClick={() => { setShowLeadQueue(v => !v); setShowKanban(false); }}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-bold uppercase tracking-wider transition-all ${
-                showLeadQueue
-                  ? 'bg-[#00c896]/10 border-[#00c896]/30 text-[#00c896]'
-                  : 'bg-zinc-900/40 border-zinc-800 text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <Users size={13} />
-              Leads {leads.length > 0 && <span className="font-mono">{leads.length}</span>}
-            </button>
-            <button
-              onClick={() => { setShowKanban(v => !v); setShowLeadQueue(false); }}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-bold uppercase tracking-wider transition-all ${
-                showKanban
-                  ? 'bg-[#00c896]/10 border-[#00c896]/30 text-[#00c896]'
-                  : 'bg-zinc-900/40 border-zinc-800 text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <Layers size={13} />
-              Pipeline
-            </button>
-          </div>
         </div>
       </div>
 
@@ -427,10 +401,6 @@ export default function Home() {
           onSaveNotes={handleSaveNotes}
         />
       )}
-
-      <footer className="text-[10px] tracking-wider text-zinc-650 font-semibold uppercase z-10 select-none pb-4">
-        Powered by Inex Labs Voice Engine
-      </footer>
     </div>
   );
 }
