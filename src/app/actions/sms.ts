@@ -167,21 +167,27 @@ export async function sendSMS(
 
 export async function getMessages(contactId: string, linePhoneNumber?: string) {
   try {
-    const lineVariants = linePhoneNumber ? getPhoneVariants(linePhoneNumber) : [];
-    let whereClause: any = { contactId };
+    const activeLine = linePhoneNumber || process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
+    const lineVariants = getPhoneVariants(activeLine);
+    
+    // Also fetch contact to match by phone number variants
+    const contact = await db.contact.findUnique({ where: { id: contactId } });
+    const contactVariants = contact?.phoneNumber ? getPhoneVariants(contact.phoneNumber) : [];
 
-    if (lineVariants.length > 0) {
-      whereClause = {
-        contactId,
-        OR: [
-          { sender: { in: lineVariants } },
-          { recipient: { in: lineVariants } }
-        ]
-      };
+    const orClauses: any[] = [
+      { contactId, sender: { in: lineVariants } },
+      { contactId, recipient: { in: lineVariants } }
+    ];
+
+    if (contactVariants.length > 0) {
+      orClauses.push(
+        { sender: { in: lineVariants }, recipient: { in: contactVariants } },
+        { sender: { in: contactVariants }, recipient: { in: lineVariants } }
+      );
     }
 
     const messages = await db.message.findMany({
-      where: whereClause,
+      where: { OR: orClauses },
       orderBy: { timestamp: 'asc' },
     });
     return { success: true, messages };
@@ -193,116 +199,88 @@ export async function getMessages(contactId: string, linePhoneNumber?: string) {
 
 export async function getThreads(linePhoneNumber?: string) {
   try {
-    const lineVariants = linePhoneNumber ? getPhoneVariants(linePhoneNumber) : [];
+    const activeLine = linePhoneNumber || process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
+    const lineVariants = getPhoneVariants(activeLine);
 
-    // If linePhoneNumber is provided, strictly isolate messages for this line
-    if (lineVariants.length > 0) {
-      const messages = await db.message.findMany({
-        where: {
-          OR: [
-            { sender: { in: lineVariants } },
-            { recipient: { in: lineVariants } }
-          ]
-        },
-        orderBy: { timestamp: 'desc' },
-        take: 1000,
-      });
-
-      const threadsMap = new Map<string, { contact: any; lastMessage: any; unreadCount: number }>();
-      const contactIdsToFetch = new Set<string>();
-      const phonesToFetch = new Set<string>();
-
-      for (const msg of messages) {
-        const isOutbound = msg.direction === 'outbound' || lineVariants.includes(msg.sender);
-        const otherParty = isOutbound ? msg.recipient : msg.sender;
-        const normOther = normalizePhone(otherParty) || otherParty;
-        if (!normOther) continue;
-
-        if (msg.contactId) contactIdsToFetch.add(msg.contactId);
-        phonesToFetch.add(normOther);
-      }
-
-      const contacts = await db.contact.findMany({
-        where: {
-          OR: [
-            { id: { in: Array.from(contactIdsToFetch) } },
-            { phoneNumber: { in: Array.from(phonesToFetch) } }
-          ]
-        }
-      });
-
-      const contactByPhone = new Map<string, any>();
-      const contactById = new Map<string, any>();
-      for (const c of contacts) {
-        contactById.set(c.id, c);
-        contactByPhone.set(normalizePhone(c.phoneNumber), c);
-      }
-
-      for (const msg of messages) {
-        const isOutbound = msg.direction === 'outbound' || lineVariants.includes(msg.sender);
-        const otherParty = isOutbound ? msg.recipient : msg.sender;
-        const normOther = normalizePhone(otherParty) || otherParty;
-        if (!normOther) continue;
-
-        const threadKey = normOther;
-        if (!threadsMap.has(threadKey)) {
-          let contact = (msg.contactId && contactById.get(msg.contactId)) || contactByPhone.get(normOther);
-          if (!contact) {
-            contact = {
-              id: msg.contactId || normOther,
-              name: normOther,
-              phoneNumber: normOther,
-              tags: ['Lead'],
-              createdAt: msg.timestamp,
-              updatedAt: msg.timestamp,
-            };
-          }
-
-          threadsMap.set(threadKey, {
-            contact,
-            lastMessage: msg,
-            unreadCount: (msg.direction === 'inbound' && msg.status === 'received') ? 1 : 0,
-          });
-        } else {
-          if (msg.direction === 'inbound' && msg.status === 'received') {
-            const entry = threadsMap.get(threadKey)!;
-            entry.unreadCount += 1;
-          }
-        }
-      }
-
-      const threads = Array.from(threadsMap.values());
-      threads.sort((a, b) => {
-        const timeA = a.lastMessage ? new Date(a.lastMessage.timestamp).getTime() : 0;
-        const timeB = b.lastMessage ? new Date(b.lastMessage.timestamp).getTime() : 0;
-        return timeB - timeA;
-      });
-
-      return { success: true, threads };
-    }
-
-    // Default legacy behavior if no linePhoneNumber provided:
-    const contacts = await db.contact.findMany({
-      orderBy: { updatedAt: 'desc' },
+    // Strictly isolate messages for this line
+    const messages = await db.message.findMany({
+      where: {
+        OR: [
+          { sender: { in: lineVariants } },
+          { recipient: { in: lineVariants } }
+        ]
+      },
+      orderBy: { timestamp: 'desc' },
+      take: 1000,
     });
 
-    const threads = await Promise.all(
-      contacts.map(async (contact) => {
-        const lastMessage = await db.message.findFirst({
-          where: { contactId: contact.id },
-          orderBy: { timestamp: 'desc' },
-        });
-        return {
-          contact,
-          lastMessage,
-          unreadCount: 0,
-        };
-      })
-    );
+    const threadsMap = new Map<string, { contact: any; lastMessage: any; unreadCount: number }>();
+    const contactIdsToFetch = new Set<string>();
+    const phonesToFetch = new Set<string>();
 
+    for (const msg of messages) {
+      const isOutbound = msg.direction === 'outbound' || lineVariants.includes(msg.sender);
+      const otherParty = isOutbound ? msg.recipient : msg.sender;
+      const normOther = normalizePhone(otherParty) || otherParty;
+      if (!normOther) continue;
+
+      if (msg.contactId) contactIdsToFetch.add(msg.contactId);
+      phonesToFetch.add(normOther);
+    }
+
+    const contacts = await db.contact.findMany({
+      where: {
+        OR: [
+          { id: { in: Array.from(contactIdsToFetch) } },
+          { phoneNumber: { in: Array.from(phonesToFetch) } }
+        ]
+      }
+    });
+
+    const contactByPhone = new Map<string, any>();
+    const contactById = new Map<string, any>();
+    for (const c of contacts) {
+      contactById.set(c.id, c);
+      contactByPhone.set(normalizePhone(c.phoneNumber), c);
+    }
+
+    for (const msg of messages) {
+      const isOutbound = msg.direction === 'outbound' || lineVariants.includes(msg.sender);
+      const otherParty = isOutbound ? msg.recipient : msg.sender;
+      const normOther = normalizePhone(otherParty) || otherParty;
+      if (!normOther) continue;
+
+      const threadKey = normOther;
+      if (!threadsMap.has(threadKey)) {
+        let contact = (msg.contactId && contactById.get(msg.contactId)) || contactByPhone.get(normOther);
+        if (!contact) {
+          contact = {
+            id: msg.contactId || normOther,
+            name: normOther,
+            phoneNumber: normOther,
+            tags: ['Lead'],
+            createdAt: msg.timestamp,
+            updatedAt: msg.timestamp,
+          };
+        }
+
+        threadsMap.set(threadKey, {
+          contact,
+          lastMessage: msg,
+          unreadCount: (msg.direction === 'inbound' && msg.status === 'received') ? 1 : 0,
+        });
+      } else {
+        if (msg.direction === 'inbound' && msg.status === 'received') {
+          const entry = threadsMap.get(threadKey)!;
+          entry.unreadCount += 1;
+        }
+      }
+    }
+
+    const threads = Array.from(threadsMap.values());
     threads.sort((a, b) => {
-      const timeA = a.lastMessage ? new Date(a.lastMessage.timestamp).getTime() : new Date(a.contact.updatedAt).getTime();
-      const timeB = b.lastMessage ? new Date(b.lastMessage.timestamp).getTime() : new Date(b.contact.updatedAt).getTime();
+      const timeA = a.lastMessage ? new Date(a.lastMessage.timestamp).getTime() : 0;
+      const timeB = b.lastMessage ? new Date(b.lastMessage.timestamp).getTime() : 0;
       return timeB - timeA;
     });
 
@@ -315,8 +293,9 @@ export async function getThreads(linePhoneNumber?: string) {
 
 export async function getMessagesByPhone(phoneNumber: string, linePhoneNumber?: string) {
   try {
+    const activeLine = linePhoneNumber || process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
     const contactVariants = getPhoneVariants(phoneNumber);
-    const lineVariants = linePhoneNumber ? getPhoneVariants(linePhoneNumber) : [];
+    const lineVariants = getPhoneVariants(activeLine);
 
     let contact = await db.contact.findFirst({
       where: { phoneNumber: { in: contactVariants } }

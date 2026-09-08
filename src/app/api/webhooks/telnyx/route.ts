@@ -158,7 +158,8 @@ export async function POST(request: Request) {
       // Broadcast new message via Pusher
       await pusherServer.trigger('sms-channel', 'new-message', {
         ...message,
-        contactName: contact.name
+        contactName: contact.name,
+        line: toNumber,
       }).catch(e => {
         console.warn('[Pusher] Trigger new-message warning:', e);
       });

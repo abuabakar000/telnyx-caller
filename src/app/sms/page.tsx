@@ -71,7 +71,23 @@ interface Template {
   createdAt: string | Date;
 }
 
+const DALLAS_NUMBER = process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
+const TOLL_FREE_NUMBER = '+18667774939';
+
 export default function SMSPage() {
+  // Active Phone Line (Dallas vs Toll-Free)
+  const [activeLine, setActiveLine] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('telnyx_active_number') || DALLAS_NUMBER;
+    }
+    return DALLAS_NUMBER;
+  });
+  const activeLineRef = useRef<string>(activeLine);
+
+  useEffect(() => {
+    activeLineRef.current = activeLine;
+  }, [activeLine]);
+
   // SMS Inbox State
   const [smsThreads, setSmsThreads] = useState<Thread[]>([]);
   const [loadingThreads, setLoadingThreads] = useState(true);
@@ -131,11 +147,33 @@ export default function SMSPage() {
     }, 100);
   };
 
+  const switchLine = async (lineNum: string) => {
+    setActiveLine(lineNum);
+    activeLineRef.current = lineNum;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('telnyx_active_number', lineNum);
+    }
+    setLoadingThreads(true);
+    await loadThreads(lineNum);
+    setLoadingThreads(false);
+    if (activeThreadIdRef.current) {
+      const thread = smsThreads.find(t => t.contact.id === activeThreadIdRef.current);
+      if (thread) {
+        setLoadingMessages(true);
+        const res = await getMessages(thread.contact.id, lineNum);
+        if (res.success && res.messages) {
+          setActiveThreadMessages(res.messages);
+        }
+        setLoadingMessages(false);
+      }
+    }
+  };
+
   // Initial Data Fetching
   useEffect(() => {
     const initData = async () => {
       setLoadingThreads(true);
-      await loadThreads();
+      await loadThreads(activeLineRef.current);
       setLoadingThreads(false);
       
       await loadContacts();
@@ -152,14 +190,22 @@ export default function SMSPage() {
     const channel = client.subscribe('sms-channel');
 
     channel.bind('new-message', async (data: any) => {
-      await loadThreads();
-      if (activeThreadIdRef.current && data.contactId === activeThreadIdRef.current) {
-        setActiveThreadMessages(prev => {
-          if (prev.some(m => m.id === data.id || (m.telnyxMessageId && m.telnyxMessageId === data.telnyxMessageId))) {
-            return prev;
-          }
-          return [...prev, data];
-        });
+      const current = activeLineRef.current || DALLAS_NUMBER;
+      const cleanLine = current.replace(/\D/g, '');
+      const recDigits = (data.recipient || '').replace(/\D/g, '');
+      const sendDigits = (data.sender || '').replace(/\D/g, '');
+      const isForActiveLine = recDigits.includes(cleanLine.slice(-10)) || sendDigits.includes(cleanLine.slice(-10));
+
+      if (isForActiveLine) {
+        await loadThreads(current);
+        if (activeThreadIdRef.current && data.contactId === activeThreadIdRef.current) {
+          setActiveThreadMessages(prev => {
+            if (prev.some(m => m.id === data.id || (m.telnyxMessageId && m.telnyxMessageId === data.telnyxMessageId))) {
+              return prev;
+            }
+            return [...prev, data];
+          });
+        }
       }
     });
 
@@ -167,7 +213,7 @@ export default function SMSPage() {
       if (activeThreadIdRef.current && data.contactId === activeThreadIdRef.current) {
         setActiveThreadMessages(prev => prev.map(m => m.id === data.id ? { ...m, ...data } : m));
       }
-      await loadThreads();
+      await loadThreads(activeLineRef.current);
       await loadHealthStats();
     });
 
@@ -176,17 +222,17 @@ export default function SMSPage() {
         if (prev.some(c => c.id === data.id)) return prev;
         return [...prev, data].sort((a, b) => a.name.localeCompare(b.name));
       });
-      loadThreads();
+      loadThreads(activeLineRef.current);
     });
 
     channel.bind('update-contact', (data: any) => {
       setContactsList(prev => prev.map(c => c.id === data.id ? data : c).sort((a, b) => a.name.localeCompare(b.name)));
-      loadThreads();
+      loadThreads(activeLineRef.current);
     });
 
     channel.bind('delete-contact', (data: any) => {
       setContactsList(prev => prev.filter(c => c.id !== data.id));
-      loadThreads();
+      loadThreads(activeLineRef.current);
       if (activeThreadIdRef.current === data.id) {
         setActiveThreadId(null);
       }
@@ -198,8 +244,9 @@ export default function SMSPage() {
   }, []);
 
   // API wrappers
-  const loadThreads = async () => {
-    const res = await getThreads();
+  const loadThreads = async (lineNum?: string) => {
+    const line = lineNum || activeLineRef.current || DALLAS_NUMBER;
+    const res = await getThreads(line);
     if (res.success && res.threads) {
       setSmsThreads(res.threads);
     }
@@ -236,7 +283,8 @@ export default function SMSPage() {
   const openThread = async (contact: Contact) => {
     setActiveThreadId(contact.id);
     setLoadingMessages(true);
-    const res = await getMessages(contact.id);
+    const line = activeLineRef.current || DALLAS_NUMBER;
+    const res = await getMessages(contact.id, line);
     if (res.success && res.messages) {
       setActiveThreadMessages(res.messages);
     }
@@ -250,15 +298,17 @@ export default function SMSPage() {
     if (!activeThread) return;
 
     setSendingSms(true);
-    const res = await sendSMS(activeThread.contact.phoneNumber, newSmsText, activeThread.contact.id);
+    const sendingFrom = activeLineRef.current || DALLAS_NUMBER;
+    const res = await sendSMS(activeThread.contact.phoneNumber, newSmsText, activeThread.contact.id, sendingFrom);
     setSendingSms(false);
 
     if (res.success) {
       setNewSmsText('');
-      const msgRes = await getMessages(activeThreadId);
+      const msgRes = await getMessages(activeThreadId, sendingFrom);
       if (msgRes.success && msgRes.messages) {
         setActiveThreadMessages(msgRes.messages);
       }
+      loadThreads(sendingFrom);
     } else {
       setErrorMessage(res.error || 'Failed to send SMS.');
     }
@@ -292,8 +342,9 @@ export default function SMSPage() {
       }
     }
 
-    // 3. Send SMS
-    const res = await sendSMS(finalPhone, dmTextInput, contact.id);
+    // 3. Send SMS from active line
+    const sendingFrom = activeLineRef.current || DALLAS_NUMBER;
+    const res = await sendSMS(finalPhone, dmTextInput, contact.id, sendingFrom);
     setDmSending(false);
 
     if (res.success) {
@@ -301,7 +352,7 @@ export default function SMSPage() {
       setDmPhoneInput('');
       setDmNameInput('');
       setDmTextInput('');
-      await loadThreads();
+      await loadThreads(sendingFrom);
       openThread(contact);
     } else {
       setErrorMessage(res.error || 'Failed to dispatch direct message.');
@@ -474,6 +525,31 @@ export default function SMSPage() {
             >
               <Plus size={10} /> Direct Message
             </button>
+          </div>
+
+          {/* Dedicated Per-Number Inboxes Tab Bar */}
+          <div className="flex items-center gap-1.5 mb-3 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800 shrink-0 select-none">
+            {[
+              { num: DALLAS_NUMBER, label: 'Dallas', formatted: '+1 (214) 774-6991' },
+              { num: TOLL_FREE_NUMBER, label: 'Toll-Free', formatted: '+1 (866) 777-4939' },
+            ].map((line) => {
+              const isSelected = activeLine === line.num;
+              return (
+                <button
+                  key={line.num}
+                  type="button"
+                  onClick={() => switchLine(line.num)}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/15'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                  }`}
+                >
+                  <span>{line.label} Inbox</span>
+                  <span className="text-[10px] font-mono opacity-80">({line.formatted})</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Search bar */}
@@ -664,6 +740,32 @@ export default function SMSPage() {
                   </div>
                 </div>
 
+                {/* Active Sending Line Bar */}
+                <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border border-zinc-850 rounded-xl my-2 text-xs select-none shrink-0">
+                  <span className="text-zinc-400 text-[11px] font-medium">Sending SMS as:</span>
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      { num: DALLAS_NUMBER, label: 'Dallas', formatted: '+1 (214) 774-6991' },
+                      { num: TOLL_FREE_NUMBER, label: 'Toll-Free', formatted: '+1 (866) 777-4939' },
+                    ].map((l) => (
+                      <button
+                        key={l.num}
+                        type="button"
+                        onClick={() => switchLine(l.num)}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                          activeLine === l.num
+                            ? 'bg-emerald-500 text-black font-extrabold shadow-sm'
+                            : 'bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700'
+                        }`}
+                      >
+                        <span>{l.label}</span>
+                        <span className="text-[10px] font-mono opacity-80 font-normal">({l.formatted})</span>
+                        {activeLine === l.num && <span className="w-1.5 h-1.5 rounded-full bg-black ml-0.5" />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {/* Error log alert inside chat */}
                 {errorMessage && (
                   <div className="m-2 p-2 rounded-xl bg-red-950/20 border border-red-900/35 text-red-400 text-[10px] text-center flex items-center justify-between gap-1 select-none">
@@ -788,6 +890,9 @@ export default function SMSPage() {
                             <Send size={12} fill="currentColor" />
                           )}
                         </button>
+                      </div>
+                      <div className="text-[9px] text-zinc-500 text-center font-medium">
+                        Press Enter to send • Sending from {activeLine === TOLL_FREE_NUMBER ? 'Toll-Free (+1 866-777-4939)' : 'Dallas (+1 214-774-6991)'}
                       </div>
                     </div>
                   )}

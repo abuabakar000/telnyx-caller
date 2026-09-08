@@ -100,27 +100,25 @@ const normalizeDigitsOnly = (num: string): string => {
 
 const getHistoryKeyForNumber = (num?: string): string => {
   const clean = (num || '').replace(/\D/g, '');
-  return clean ? `call_dialer_history_${clean}` : 'call_dialer_history';
+  return clean ? `call_dialer_history_${clean}` : 'call_dialer_history_default';
 };
 
 const loadHistoryForNumber = (num?: string): CallLog[] => {
   if (typeof window === 'undefined') return [];
+  const cleanTarget = normalizeDigitsOnly(num || '');
   const key = getHistoryKeyForNumber(num);
   let saved = localStorage.getItem(key);
-
-  // Backwards compatibility: if specific key doesn't exist, migrate from legacy key
-  if (!saved) {
-    const legacy = localStorage.getItem('call_dialer_history');
-    if (legacy) {
-      saved = legacy;
-      localStorage.setItem(key, legacy);
-    }
-  }
 
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.filter(log => {
+          if (!cleanTarget) return true;
+          const cleanLine = normalizeDigitsOnly(log.line || '12147746991');
+          return cleanLine === cleanTarget;
+        });
+      }
     } catch (e) {
       console.error('Error parsing call history:', e);
     }
@@ -130,10 +128,12 @@ const loadHistoryForNumber = (num?: string): CallLog[] => {
 
 const saveHistoryForNumber = (num: string | undefined, history: CallLog[]) => {
   if (typeof window === 'undefined') return;
+  const cleanTarget = normalizeDigitsOnly(num || '');
   const key = getHistoryKeyForNumber(num);
-  const data = JSON.stringify(history);
-  localStorage.setItem(key, data);
-  localStorage.setItem('call_dialer_history', data);
+  const filtered = cleanTarget
+    ? history.filter(log => normalizeDigitsOnly(log.line || (cleanTarget === '12147746991' ? '12147746991' : '')) === cleanTarget)
+    : history;
+  localStorage.setItem(key, JSON.stringify(filtered));
 };
 
 const formatRelativeTime = (dateInput: string | number | Date): string => {
@@ -398,15 +398,22 @@ export default function Dialer({
   const [callState, setCallState] = useState<'idle' | 'dialing' | 'ringing' | 'active' | 'done'>('idle');
   const [isMuted, setIsMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [telnyxNumber, setTelnyxNumber] = useState<string>('');
-  const [telnyxSmsNumber, setTelnyxSmsNumber] = useState<string>('');
-  const [availableNumbers, setAvailableNumbers] = useState<string[]>([]);
+  const defaultDallas = process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991';
+  const defaultTollFree = '+18667774939';
+  const [telnyxNumber, setTelnyxNumber] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('telnyx_active_number') || defaultDallas;
+    }
+    return defaultDallas;
+  });
+  const [telnyxSmsNumber, setTelnyxSmsNumber] = useState<string>(defaultTollFree);
+  const [availableNumbers, setAvailableNumbers] = useState<string[]>([defaultDallas, defaultTollFree]);
   const [newNumberInput, setNewNumberInput] = useState('');
   const [showNumberDropdown, setShowNumberDropdown] = useState(false);
   const [showChatLineDropdown, setShowChatLineDropdown] = useState(false);
   const [showInboxLineDropdown, setShowInboxLineDropdown] = useState(false);
   const [confirmDeleteNumber, setConfirmDeleteNumber] = useState<string | null>(null);
-  const telnyxNumberRef = useRef('');
+  const telnyxNumberRef = useRef(process.env.NEXT_PUBLIC_TELNYX_NUMBER || '+12147746991');
 
   // Audio Device Selection
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
@@ -427,7 +434,13 @@ export default function Dialer({
 
   // UI State
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [callHistory, setCallHistory] = useState<CallLog[]>([]);
+  const [callHistory, setCallHistory] = useState<CallLog[]>(() => {
+    if (typeof window !== 'undefined') {
+      const activeLine = localStorage.getItem('telnyx_active_number') || '+12147746991';
+      return loadHistoryForNumber(activeLine);
+    }
+    return [];
+  });
   const [historyFilter, setHistoryFilter] = useState<'all' | 'missed'>('all');
   const [callDuration, setCallDuration] = useState(0);
 
@@ -2550,6 +2563,39 @@ export default function Dialer({
 
         {leftPanelTab === 'recents' ? (
           <>
+            {/* Prominent Line Switcher Tabs for Call History */}
+            {availableNumbers.length > 1 && (
+              <div className="flex items-center gap-1.5 mb-2.5 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800 select-none shrink-0">
+                {availableNumbers.map((num) => {
+                  const isDallas = num.includes('214');
+                  const isTollFree = num.includes('866') || num.includes('800') || num.includes('888') || num.includes('877');
+                  const label = isTollFree ? 'Toll-Free' : isDallas ? 'Dallas' : 'Line';
+                  const isSelected = (telnyxNumber === num);
+                  const lineLogs = loadHistoryForNumber(num);
+                  return (
+                    <button
+                      key={num}
+                      type="button"
+                      onClick={() => switchActiveNumber(num)}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-500 text-black shadow-sm'
+                          : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                      }`}
+                    >
+                      <span>{label}</span>
+                      <span className="text-[10px] font-mono opacity-80">({formatPhoneNumber(num)})</span>
+                      {lineLogs.length > 0 && (
+                        <span className={`text-[9px] font-mono px-1 rounded-full ${isSelected ? 'bg-black/20 text-black font-bold' : 'bg-zinc-800 text-zinc-400'}`}>
+                          {lineLogs.length}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {/* Filter Tabs: All vs Missed */}
             <div className="flex items-center gap-1.5 mb-3 bg-zinc-900/50 p-1 rounded-xl border border-zinc-900 shrink-0">
               <button
@@ -3793,6 +3839,38 @@ export default function Dialer({
                 </button>
               </div>
 
+              {/* Dedicated Per-Number Inboxes Tab Bar */}
+              {availableNumbers.length > 1 && (
+                <div className="flex items-center gap-1.5 mt-3 mb-1 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800 shrink-0 select-none">
+                  {availableNumbers.map((num) => {
+                    const isDallas = num.includes('214');
+                    const isTollFree = num.includes('866') || num.includes('800') || num.includes('888') || num.includes('877');
+                    const label = isTollFree ? 'Toll-Free' : isDallas ? 'Dallas' : 'Line';
+                    const isSelected = (telnyxNumber === num);
+                    return (
+                      <button
+                        key={num}
+                        type="button"
+                        onClick={() => switchActiveNumber(num)}
+                        className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/15'
+                            : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                        }`}
+                      >
+                        <span>{label} Inbox</span>
+                        <span className="text-[10px] font-mono opacity-80">({formatPhoneNumber(num)})</span>
+                        {isSelected && totalUnreadSms > 0 && (
+                          <span className="text-[9px] font-bold bg-black text-emerald-400 px-1.5 py-0.5 rounded-full ml-0.5">
+                            {totalUnreadSms}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Quick Compose New Chat Bar (When Toggled) */}
               {showNewChatInput && (
                 <div className="mt-3 p-3.5 rounded-2xl bg-zinc-900/40 border border-zinc-850 space-y-2.5 select-none">
@@ -4061,6 +4139,37 @@ export default function Dialer({
                 </button>
               </div>
 
+              {/* Active Outbound Line Selector Bar in Chat View */}
+              {availableNumbers.length > 1 && (
+                <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border border-zinc-850 rounded-xl my-2 text-xs select-none shrink-0">
+                  <span className="text-zinc-400 text-[11px] font-medium">Sending SMS as:</span>
+                  <div className="flex items-center gap-1.5">
+                    {availableNumbers.map((num) => {
+                      const isDallas = num.includes('214');
+                      const isTollFree = num.includes('866') || num.includes('800') || num.includes('888') || num.includes('877');
+                      const label = isTollFree ? 'Toll-Free' : isDallas ? 'Dallas' : 'Line';
+                      const isSelected = (telnyxNumber === num);
+                      return (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => switchActiveNumber(num)}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                            isSelected
+                              ? 'bg-emerald-500 text-black font-extrabold shadow-sm'
+                              : 'bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700'
+                          }`}
+                        >
+                          <span>{label}</span>
+                          <span className="text-[10px] font-mono opacity-80 font-normal">({formatPhoneNumber(num)})</span>
+                          {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-black ml-0.5" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Message Bubble Stream */}
               <div className="flex-grow overflow-y-auto space-y-3 pr-1 py-3 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent min-h-[260px] max-h-[460px]">
                 {loadingSmsMessages ? (
@@ -4148,8 +4257,8 @@ export default function Dialer({
                     )}
                   </button>
                 </div>
-                <div className="text-[9px] text-zinc-600 mt-1 text-center font-medium">
-                  Press Enter to send • Sending from {telnyxNumber || telnyxSmsNumber || 'line'}
+                <div className="text-[9px] text-zinc-500 mt-1 text-center font-medium">
+                  Press Enter to send • Sending from {(telnyxNumber || '').includes('866') ? `Toll-Free (${formatPhoneNumber(telnyxNumber)})` : `Dallas (${formatPhoneNumber(telnyxNumber || '')})`}
                 </div>
               </form>
             </div>
